@@ -6,7 +6,7 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use sqlx::{postgres::PgPoolOptions, Executor};
 use utoipa::openapi::{ObjectBuilder, RefOr, Schema, SchemaType};
 use utoipa::ToSchema;
-
+use crate::api::method::get_validity_proof::{ValidityProofRequest, ValidityProofResponse};
 use super::method::get_compressed_account::AccountResponse;
 use super::{
     error::PhotonApiError,
@@ -26,6 +26,7 @@ use super::{
         get_compressed_token_accounts_by_delegate::get_compressed_account_token_accounts_by_delegate,
         get_compressed_token_accounts_by_owner::get_compressed_token_accounts_by_owner,
         get_health::get_health,
+        get_validity_proof::get_validity_proof,
         get_multiple_compressed_account_proofs::{
             get_multiple_compressed_account_proofs, GetMultipleCompressedAccountProofsResponse,
             HashList,
@@ -169,6 +170,13 @@ impl PhotonApi {
         request: GetMultipleCompressedAccountsRequest,
     ) -> Result<GetMultipleCompressedAccountsResponse, PhotonApiError> {
         get_multiple_compressed_accounts(self.db_conn.as_ref(), request).await
+    }
+
+    pub async fn get_validity_proof(
+        &self,
+        request: ValidityProofRequest,
+    ) -> Result<ValidityProofResponse, PhotonApiError> {
+        get_validity_proof(request).await
     }
 
     // HACK: This could be easily implemented through a macro. Using ChatGPT instead for speed.

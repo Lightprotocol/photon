@@ -1,5 +1,12 @@
-test-ledger/
+# Environment files
+.env
 
-# Added by cargo
+# IDE files
+.idea
 
+# Mac files
+.DS_Store
+
+# Build files
 /target
+test-ledger/

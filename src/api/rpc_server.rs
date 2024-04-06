@@ -153,5 +153,10 @@ pub fn build_rpc_module(contract: PhotonApi) -> Result<RpcModule<PhotonApi>, any
         },
     )?;
 
+    module.register_async_method("getValidityProof", |rpc_params, rpc_context| async move {
+        let payload = rpc_params.parse()?;
+        rpc_context.get_validity_proof(payload).await.map_err(Into::into)
+    })?;
+
     Ok(module)
 }

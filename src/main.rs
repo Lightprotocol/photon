@@ -53,6 +53,11 @@ struct Args {
     #[arg(short, long)]
     db_url: Option<String>,
 
+    // /// Prover URL to make validity proofs.
+    // #[arg(short, long)]
+    // prover_url: Option<String>,
+
+    
     /// The start slot to begin indexing from. Defaults to the current slot for testnet/mainnet/devnet
     /// and 0 for localnet.
     #[arg(short, long)]
