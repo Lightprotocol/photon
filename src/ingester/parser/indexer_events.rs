@@ -17,6 +17,8 @@ pub struct PublicTransactionEvent {
     pub message: Option<Vec<u8>>,
 }
 
+
+
 #[derive(Debug, PartialEq, Default, Clone, AnchorSerialize, AnchorDeserialize)]
 pub struct CompressedAccount {
     pub owner: Pubkey,

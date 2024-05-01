@@ -3,3 +3,6 @@ test-ledger/
 # Added by cargo
 
 /target
+
+.DS_Store
+.idea

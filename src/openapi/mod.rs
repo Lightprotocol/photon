@@ -26,6 +26,7 @@ use crate::common::typedefs::token_data::TokenData;
 use crate::common::typedefs::unix_timestamp::UnixTimestamp;
 use crate::common::typedefs::unsigned_integer::UnsignedInteger;
 use dirs;
+use utoipa::openapi::Object;
 use utoipa::openapi::Response;
 
 use crate::common::relative_project_path;
@@ -98,7 +99,7 @@ fn add_string_property(
     builder.property(name, string_schema)
 }
 
-fn build_error_response(description: &str) -> Response {
+fn build_error_response_old(description: &str) -> Response {
     ResponseBuilder::new()
         .description(description)
         .content(
@@ -114,6 +115,51 @@ fn build_error_response(description: &str) -> Response {
                         )
                         .build(),
                 ))
+                .build(),
+        )
+        .build()
+}
+
+fn build_error_response(description: &str) -> Response {
+    let error_object = ObjectBuilder::new()
+        .property(
+            "code",
+            RefOr::T(Schema::Object(
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Integer)
+                    .build(),
+            )),
+        )
+        .property(
+            "message",
+            RefOr::T(Schema::Object(
+                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+            )),
+        )
+        .build();
+
+    let response_schema = ObjectBuilder::new()
+        .property(
+            "jsonrpc",
+            RefOr::T(Schema::Object(
+                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+            )),
+        )
+        .property(
+            "id",
+            RefOr::T(Schema::Object(
+                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+            )),
+        )
+        .property("error", RefOr::T(Schema::Object(error_object)))
+        .build();
+
+    ResponseBuilder::new()
+        .description(description)
+        .content(
+            JSON_CONTENT_TYPE,
+            ContentBuilder::new()
+                .schema(Schema::Object(response_schema))
                 .build(),
         )
         .build()
@@ -148,6 +194,47 @@ fn request_schema(name: &str, params: Option<RefOr<Schema>>) -> RefOr<Schema> {
     RefOr::T(Schema::Object(builder.build()))
 }
 
+fn response_schema(result: RefOr<Schema>) -> RefOr<Schema> {
+    let mut builder = ObjectBuilder::new();
+
+    builder = add_string_property(
+        builder,
+        "jsonrpc",
+        "2.0",
+        "The version of the JSON-RPC protocol.",
+    );
+    builder = add_string_property(
+        builder,
+        "id",
+        "test-account",
+        "An ID to identify the response.",
+    );
+    builder = builder.property("result", result);
+
+    // Add optional error property
+    let error_object = ObjectBuilder::new()
+        .property(
+            "code",
+            RefOr::T(Schema::Object(
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Integer)
+                    .build(),
+            )),
+        )
+        .property(
+            "message",
+            RefOr::T(Schema::Object(
+                ObjectBuilder::new().schema_type(SchemaType::String).build(),
+            )),
+        )
+        .build();
+    builder = builder.property("error", RefOr::T(Schema::Object(error_object)));
+
+    builder = builder.required("jsonrpc").required("id");
+
+    RefOr::T(Schema::Object(builder.build()))
+}
+
 // Examples of allOf references are always {}, which is incorrect.
 #[allow(non_snake_case)]
 fn fix_examples_for_allOf_references(schema: RefOr<Schema>) -> RefOr<Schema> {
@@ -176,18 +263,18 @@ fn fix_examples_for_allOf_references(schema: RefOr<Schema>) -> RefOr<Schema> {
 
 pub fn update_docs(is_test: bool) {
     let method_api_specs = PhotonApi::method_api_specs();
+    let mut doc = ApiDoc::openapi();
+    doc.components = doc.components.map(|components| {
+        let mut components = components.clone();
+        components.schemas = components
+            .schemas
+            .iter()
+            .map(|(k, v)| (k.clone(), fix_examples_for_allOf_references(v.clone())))
+            .collect();
+        components
+    });
 
     for spec in method_api_specs {
-        let mut doc = ApiDoc::openapi();
-        doc.components = doc.components.map(|components| {
-            let mut components = components.clone();
-            components.schemas = components
-                .schemas
-                .iter()
-                .map(|(k, v)| (k.clone(), fix_examples_for_allOf_references(v.clone())))
-                .collect();
-            components
-        });
         let content = ContentBuilder::new()
             .schema(request_schema(&spec.name, spec.request))
             .build();
@@ -195,11 +282,14 @@ pub fn update_docs(is_test: bool) {
             .content(JSON_CONTENT_TYPE, content)
             .required(Some(Required::True))
             .build();
+        let wrapped_response_schema =
+            response_schema(fix_examples_for_allOf_references(spec.response));
+
         let responses = ResponsesBuilder::new().response(
             "200",
             ResponseBuilder::new().content(
                 JSON_CONTENT_TYPE,
-                ContentBuilder::new().schema(fix_examples_for_allOf_references(spec.response)).build(),
+                ContentBuilder::new().schema(wrapped_response_schema).build(),
             ),
         ).response("400", build_error_response("Invalid request."))
         .response("401", build_error_response("Unauthorized request."))
@@ -214,47 +304,45 @@ pub fn update_docs(is_test: bool) {
         let mut path_item = PathItem::new(PathItemType::Post, operation);
 
         path_item.summary = Some(spec.name.clone());
-        doc.paths.paths.insert("/".to_string(), path_item);
-        doc.servers = Some(vec![ServerBuilder::new()
-            .url("http://127.0.0.1".to_string())
-            .build()]);
-        let yaml = doc.to_yaml().unwrap();
+        doc.paths
+            .paths
+            .insert(format!("/{method}", method = spec.name), path_item);
+    }
 
-        let path = match is_test {
-            true => {
-                let tmp_directory = dirs::home_dir().unwrap().join(".tmp");
+    // doc.paths.paths.insert("/".to_string(), path_item);
+    doc.servers = Some(vec![ServerBuilder::new()
+        .url("http://127.0.0.1".to_string())
+        .build()]);
+    let yaml = doc.to_yaml().unwrap();
 
-                // Create tmp directory if it does not exist
-                if !tmp_directory.exists() {
-                    std::fs::create_dir(&tmp_directory).unwrap();
-                }
+    let path = match is_test {
+        true => {
+            let tmp_directory = dirs::home_dir().unwrap().join(".tmp");
 
-                relative_project_path(&format!(
-                    "{}/{}.test.yaml",
-                    tmp_directory.display(),
-                    spec.name.clone()
-                ))
+            // Create tmp directory if it does not exist
+            if !tmp_directory.exists() {
+                std::fs::create_dir(&tmp_directory).unwrap();
             }
-            false => {
-                relative_project_path(&format!("src/openapi/specs/{}.yaml", spec.name.clone()))
-            }
-        };
 
-        std::fs::write(path.clone(), yaml).unwrap();
-
-        // Call the external swagger-cli validate command and fail if it fails
-        let validate_result = std::process::Command::new("swagger-cli")
-            .arg("validate")
-            .arg(path.to_str().unwrap())
-            .output()
-            .unwrap();
-
-        if !validate_result.status.success() {
-            let stderr = String::from_utf8_lossy(&validate_result.stderr);
-            panic!(
-                "Failed to validate OpenAPI schema for {}. {}",
-                spec.name, stderr
-            );
+            relative_project_path(&format!("{}/test.yaml", tmp_directory.display()))
         }
+        false => {
+            // relative_project_path(&format!("src/openapi/specs/{}.yaml", spec.name.clone()))
+            relative_project_path("src/openapi/specs/api.yaml")
+        }
+    };
+
+    std::fs::write(path.clone(), yaml).unwrap();
+
+    // Call the external swagger-cli validate command and fail if it fails
+    let validate_result = std::process::Command::new("swagger-cli")
+        .arg("validate")
+        .arg(path.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    if !validate_result.status.success() {
+        let stderr = String::from_utf8_lossy(&validate_result.stderr);
+        panic!("Failed to validate OpenAPI schema. {}", stderr);
     }
 }
