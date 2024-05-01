@@ -64,7 +64,7 @@ solana-client = "=1.17"
 solana-program = "=1.17"
 solana-sdk = "=1.17"
 solana-transaction-status = "=1.17"
-sqlx = { version = "0.6.2", features = [
+sqlx = {version = "0.6.2", features = [
   "macros",
   "runtime-tokio-rustls",
   "postgres",
@@ -90,8 +90,8 @@ tracing-subscriber = { version = "0.3.16", features = [
   "json",
   "env-filter",
   "ansi",
-] }
-utoipa = { version = "4.2.0", features = ["yaml", "chrono"] }
+]}
+utoipa = {version = "4.2.0", features = ["yaml", "chrono", "non_strict_integers"]}
 
 [dev-dependencies]
 function_name = "0.3.0"
