@@ -14,21 +14,16 @@ use crate::{
 };
 use light_poseidon::{Poseidon, PoseidonBytesHasher};
 
+use std::fmt::Write;
 use ark_bn254::Fr;
 use borsh::BorshDeserialize;
-use log::{debug};
-use sea_orm::{
-    sea_query::{Expr, OnConflict},
-    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, QueryFilter,
-    QueryTrait, Set, Statement,
-};
+use log::debug;
+use sea_orm::{sea_query::{Expr, OnConflict}, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, QueryFilter, QueryTrait, Set, Statement};
 use std::collections::{HashMap, HashSet};
-
 use error::IngesterError;
 use solana_program::pubkey;
 use solana_sdk::pubkey::Pubkey;
 use sqlx::types::Decimal;
-
 const COMPRESSED_TOKEN_PROGRAM: Pubkey = pubkey!("9sixVEthz2kMSKfeApZXHwuboT6DZuT6crAYJTciUCqE");
 // To avoid exceeding the 25k total parameter limit, we set the insert limit to 1k (as we have fewer
 // than 10 columns per table).
@@ -38,27 +33,44 @@ pub async fn persist_state_update(
     txn: &DatabaseTransaction,
     state_update: StateUpdate,
 ) -> Result<(), IngesterError> {
+    let state_clone = state_update.clone();
+    let StateUpdate {
+        in_accounts,
+        out_accounts,
+        path_nodes,
+        account_transactions: _account_transactions,
+        nullified_leaf_indices,
+    } = state_update;
+    if in_accounts.is_empty() && out_accounts.is_empty() && path_nodes.is_empty() && nullified_leaf_indices.is_empty() {
+        return Ok(());
+    }
+    debug!(
+        "Persisting state update with {} input accounts, {} output accounts, {} path nodes, and {} nullified leaf indices",
+        in_accounts.len(),
+        out_accounts.len(),
+        path_nodes.len(),
+        nullified_leaf_indices.len()
+    );
+
+    let mut nullify_state_updates = Vec::new();
+    for (tree_id, tree_index) in nullified_leaf_indices {
+        nullify_state_updates.push(nullify_leaf_index(txn, tree_id, tree_index).await?);
+    }
+    nullify_state_updates.push(state_clone);
+    let state_update = StateUpdate::merge_updates(nullify_state_updates);
+
     let StateUpdate {
         in_accounts,
         out_accounts,
         path_nodes,
         account_transactions,
+        nullified_leaf_indices: _nullified_leaf_indices,
     } = state_update;
-    if in_accounts.is_empty() && out_accounts.is_empty() && path_nodes.is_empty() {
-        return Ok(());
-    }
-    debug!(
-        "Persisting state update with {} input accounts, {} output accounts, and {} path nodes",
-        in_accounts.len(),
-        out_accounts.len(),
-        path_nodes.len()
-    );
-    debug!("Persisting output accounts...");
+
     for chunk in out_accounts.chunks(MAX_SQL_INSERTS) {
         append_output_accounts(txn, chunk).await?;
     }
 
-    debug!("Persisting spent accounts...");
     for chunk in in_accounts
         .into_iter()
         .collect::<Vec<_>>()
@@ -67,7 +79,6 @@ pub async fn persist_state_update(
         spend_input_accounts(txn, chunk).await?;
     }
 
-    debug!("Persisting path nodes...");
     for chunk in path_nodes
         .into_values()
         .collect::<Vec<_>>()
@@ -112,6 +123,28 @@ pub fn parse_token_data(account: &Account) -> Result<Option<TokenData>, Ingester
         }
         _ => Ok(None),
     }
+}
+
+async fn nullify_leaf_index(
+    txn: &DatabaseTransaction,
+    tree_id: [u8; 32],
+    leaf_index: u32,
+) -> Result<StateUpdate, IngesterError> {
+    let state_tree_entry = state_trees::Entity::find()
+        .filter(state_trees::Column::Tree.eq(tree_id.to_vec()))
+        .filter(state_trees::Column::LeafIdx.eq(leaf_index as i64))
+        .one(txn)
+        .await?;
+
+    let account_hash = match state_tree_entry {
+        Some(entry) => Hash::try_from(entry.hash),
+        None => return Err(IngesterError::DatabaseError(format!("Account not found for tree ID {:?} and leaf index {}", tree_id, leaf_index))),
+    }.map_err(|e| IngesterError::ParserError(format!("Failed to parse account hash: {}", e)))?;
+
+    let mut state_update = StateUpdate::new();
+    state_update.in_accounts.insert(account_hash);
+
+    Ok(state_update)
 }
 
 async fn spend_input_accounts(
@@ -196,20 +229,21 @@ fn bytes_to_sql_format(database_backend: DatabaseBackend, bytes: Vec<u8>) -> Str
     }
 }
 
-fn bytes_to_postgres_sql_format(bytes: Vec<u8>) -> String {
-    let hex_string = bytes
+fn bytes_to_hex_string(bytes: Vec<u8>) -> String {
+    bytes
         .iter()
-        .map(|byte| format!("{:02x}", byte))
-        .collect::<String>();
-    format!("'\\x{}'", hex_string) // Properly formatted for PostgreSQL BYTEA
+        .fold(String::new(), |mut acc, &byte| {
+            let _ = write!(&mut acc, "{:02x}", byte);
+            acc
+        })
+}
+
+fn bytes_to_postgres_sql_format(bytes: Vec<u8>) -> String {
+    format!("'\\x{}'", bytes_to_hex_string(bytes)) // Properly formatted for PostgreSQL BYTEA
 }
 
 fn bytes_to_sqlite_sql_format(bytes: Vec<u8>) -> String {
-    let hex_string = bytes
-        .iter()
-        .map(|byte| format!("{:02x}", byte))
-        .collect::<String>();
-    format!("X'{}'", hex_string) // Properly formatted for SQLite BLOB
+    format!("X'{}'", bytes_to_hex_string(bytes)) // Properly formatted for SQLite BLOB
 }
 
 async fn execute_account_update_query_and_update_balances(
@@ -231,7 +265,7 @@ async fn execute_account_update_query_and_update_balances(
         IngesterError::DatabaseError(format!(
             "Got error appending {:?} accounts {}. Query {}",
             account_type,
-            e.to_string(),
+            e,
             query.sql
         ))
     })?;
@@ -279,7 +313,7 @@ async fn execute_account_update_query_and_update_balances(
         .map(|(key, value)| format!("({}, {})", key, value))
         .collect::<Vec<String>>();
 
-    if values.len() > 0 {
+    if !values.is_empty() {
         let values_string = values.join(", ");
         let raw_sql = format!(
             "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
@@ -323,7 +357,7 @@ async fn append_output_accounts(
         if let Some(token_data) = parse_token_data(account)? {
             token_accounts.push(EnrichedTokenAccount {
                 token_data,
-                hash: account.hash.clone(),
+                hash: account.hash,
             });
         }
     }
@@ -435,6 +469,12 @@ async fn persist_path_nodes(
         .filter(|node| node.leaf_index.is_some())
         .collect::<Vec<_>>();
 
+    let mut zero_leaf_nodes = nodes
+        .iter()
+        .filter(|node| node.node.node == ZERO_BYTES[0])
+        .collect::<Vec<_>>();
+
+    leaf_nodes.append(&mut zero_leaf_nodes);
     leaf_nodes.sort_by_key(|node| node.seq);
 
     let leaf_locations = leaf_nodes
@@ -471,13 +511,11 @@ async fn persist_path_nodes(
             .enumerate()
         {
             let left_child = node_locations_to_hashes
-                .get(&(tree.clone(), node_index * 2))
-                .map(Clone::clone)
+                .get(&(tree.clone(), node_index * 2)).cloned()
                 .unwrap_or(ZERO_BYTES[child_level].to_vec());
 
             let right_child = node_locations_to_hashes
-                .get(&(tree.clone(), node_index * 2 + 1))
-                .map(Clone::clone)
+                .get(&(tree.clone(), node_index * 2 + 1)).cloned()
                 .unwrap_or(ZERO_BYTES[child_level].to_vec());
 
             let level = child_level + 1;
@@ -502,6 +540,9 @@ async fn persist_path_nodes(
     // We first build the query and then execute it because SeaORM has a bug where it always throws
     // an error if we do not insert a record in an insert statement. However, in this case, it's
     // expected not to insert anything if the key already exists.
+    if models_to_updates.is_empty() {
+        return Ok(());
+    }
     let mut query = state_trees::Entity::insert_many(models_to_updates.into_values())
         .on_conflict(
             OnConflict::columns([state_trees::Column::Tree, state_trees::Column::NodeIdx])

@@ -45,6 +45,7 @@ pub struct StateUpdate {
     pub out_accounts: Vec<Account>,
     pub path_nodes: HashMap<([u8; 32], u32), EnrichedPathNode>,
     pub account_transactions: HashSet<AccountTransaction>,
+    pub nullified_leaf_indices: Vec<([u8; 32], u32)>,
 }
 
 impl StateUpdate {
@@ -70,6 +71,8 @@ impl StateUpdate {
                     merged.path_nodes.insert(key, node);
                 }
             }
+
+            merged.nullified_leaf_indices.extend(update.nullified_leaf_indices);
         }
         merged
     }

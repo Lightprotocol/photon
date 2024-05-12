@@ -4,7 +4,7 @@ info:
   description: Solana indexer for general compression
   license:
     name: Apache-2.0
-  version: 0.15.0
+  version: 0.18.0
 servers:
 - url: http://127.0.0.1
 paths:
@@ -3418,7 +3418,7 @@ components:
       - lamports
       - tree
       - leafIndex
-      - slotUpdated
+      - slotCreated
       properties:
         address:
           $ref: '#/components/schemas/SerializablePubkey'
@@ -3434,7 +3434,7 @@ components:
           $ref: '#/components/schemas/SerializablePubkey'
         seq:
           $ref: '#/components/schemas/UnsignedInteger'
-        slotUpdated:
+        slotCreated:
           $ref: '#/components/schemas/UnsignedInteger'
         tree:
           $ref: '#/components/schemas/SerializablePubkey'
@@ -3466,7 +3466,6 @@ components:
     AccountState:
       type: string
       enum:
-      - uninitialized
       - initialized
       - frozen
     AccountWithOptionalTokenData:

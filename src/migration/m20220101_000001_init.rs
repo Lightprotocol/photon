@@ -79,7 +79,7 @@ impl MigrationTrait for Migration {
         // We only need to index the hash values for leaf nodes (Account identifier).
         execute_sql(
             manager,
-            "CREATE UNIQUE INDEX state_trees_hash_idx ON state_trees (hash) WHERE level = 0;",
+            "CREATE UNIQUE INDEX state_trees_hash_leaf_idx ON state_trees (hash, leaf_idx) WHERE level = 0;",
         )
         .await?;
 
