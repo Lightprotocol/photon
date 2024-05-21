@@ -16,7 +16,7 @@ use crate::{
 use super::{error::IngesterError, typedefs::block_info::TransactionInfo};
 
 use self::{
-    indexer_events::{ChangelogEvent, Changelogs, CompressedAccount, PublicTransactionEvent},
+    indexer_events::{ChangelogEvent, Changelogs, CompressedAccount, OutputCompressedAccountWithPackedContext, PublicTransactionEvent},
     state_update::{AccountTransaction, PathUpdate, StateUpdate},
 };
 
@@ -154,7 +154,7 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
 }
 
 fn parse_account_data(
-    compressed_account: CompressedAccount,
+    compressed_account: OutputCompressedAccountWithPackedContext,
     hash: [u8; 32],
     tree: Pubkey,
     leaf_index: u32,
@@ -166,7 +166,7 @@ fn parse_account_data(
         lamports,
         address,
         data,
-    } = compressed_account;
+    } = compressed_account.compressed_account;
 
     let data = data.map(|d| AccountData {
         discriminator: UnsignedInteger(LittleEndian::read_u64(&d.discriminator)),

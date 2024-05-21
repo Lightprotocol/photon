@@ -3,21 +3,25 @@
 use anchor_lang::prelude::*;
 use borsh::{BorshDeserialize, BorshSerialize};
 
-#[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize)]
+#[derive(Debug, PartialEq, Default, Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct OutputCompressedAccountWithPackedContext {
+    pub compressed_account: CompressedAccount,
+    pub merkle_tree_index: u8,
+}
+
+#[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize, Default, PartialEq)]
 pub struct PublicTransactionEvent {
     pub input_compressed_account_hashes: Vec<[u8; 32]>,
     pub output_compressed_account_hashes: Vec<[u8; 32]>,
-    pub output_compressed_accounts: Vec<CompressedAccount>,
-    pub output_state_merkle_tree_account_indices: Vec<u8>,
+    pub output_compressed_accounts: Vec<OutputCompressedAccountWithPackedContext>,
     pub output_leaf_indices: Vec<u32>,
     pub relay_fee: Option<u64>,
     pub is_compress: bool,
     pub compression_lamports: Option<u64>,
     pub pubkey_array: Vec<Pubkey>,
+    // TODO: remove(data can just be written into a compressed account)
     pub message: Option<Vec<u8>>,
 }
-
-
 
 #[derive(Debug, PartialEq, Default, Clone, AnchorSerialize, AnchorDeserialize)]
 pub struct CompressedAccount {
@@ -47,6 +51,7 @@ pub struct Changelogs {
 #[repr(C)]
 pub enum ChangelogEvent {
     V1(ChangelogEventV1),
+    V2(ChangelogEventV2),
 }
 
 /// Node of the Merkle path with an index representing the position in a
@@ -69,6 +74,24 @@ pub struct ChangelogEventV1 {
     /// Changelog event index.
     pub index: u32,
 }
+
+#[derive(BorshDeserialize, BorshSerialize, Debug)]
+pub struct ChangelogEventV2 {
+    /// Public key of the tree.
+    pub id: [u8; 32],
+    pub leaves: Vec<UpdatedLeaf>,
+    /// Number of successful operations on the on-chain tree.
+    /// seq corresponds to leaves[0].
+    /// seq + 1 corresponds to leaves[1].
+    pub seq: u64,
+}
+
+#[derive(BorshDeserialize, BorshSerialize, Debug, Clone)]
+pub struct UpdatedLeaf {
+    pub leaf: [u8; 32],
+    pub leaf_index: u64,
+}
+
 
 #[derive(BorshDeserialize, BorshSerialize, Debug)]
 pub struct Nullifier {
