@@ -35,7 +35,7 @@ use sqlx::types::Decimal;
 pub mod persisted_indexed_merkle_tree;
 pub mod persisted_state_tree;
 
-const COMPRESSED_TOKEN_PROGRAM: Pubkey = pubkey!("HXVfQ44ATEi9WBKLSCCwM54KokdkzqXci9xCQ7ST9SYN");
+const COMPRESSED_TOKEN_PROGRAM: Pubkey = pubkey!("cTokenmWW8bLPjZEBAUgYy3zKxQZW6VKi7bqNFEVv3m");
 const TREE_HEIGHT: u32 = 27;
 // To avoid exceeding the 64k total parameter limit
 pub const MAX_SQL_INSERTS: usize = 5000;
