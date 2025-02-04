@@ -2,7 +2,7 @@ use borsh::BorshDeserialize;
 use byteorder::{ByteOrder, LittleEndian};
 use light_utils::instruction::event::event_from_light_transaction;
 use indexer_events::{IndexedMerkleTreeEvent, MerkleTreeEvent, NullifierEvent};
-use log::{debug, info};
+use log::debug;
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 use state_update::{IndexedTreeLeafUpdate, LeafNullification};
 
