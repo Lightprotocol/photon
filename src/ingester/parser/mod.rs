@@ -49,6 +49,7 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
         let mut vec_accounts = Vec::<Vec<Pubkey>>::new();
         let mut vec_instructions_data = Vec::new();
         vec_instructions_data.push(instruction_group.outer_instruction.data);
+        vec_accounts.push(instruction_group.outer_instruction.accounts.clone());
 
         instruction_group.inner_instructions.iter().find_map(|inner_instruction| {
             vec_instructions_data.push(inner_instruction.data.clone());
