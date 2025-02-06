@@ -1,11 +1,11 @@
-use borsh::BorshDeserialize;
 use byteorder::{ByteOrder, LittleEndian};
-use light_utils::instruction::event::event_from_light_transaction;
 use indexer_events::{IndexedMerkleTreeEvent, MerkleTreeEvent, NullifierEvent};
+use light_utils::instruction::event::event_from_light_transaction;
 use log::debug;
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 use state_update::{IndexedTreeLeafUpdate, LeafNullification};
 
+use super::{error::IngesterError, typedefs::block_info::TransactionInfo};
 use crate::common::typedefs::{
     account::{Account, AccountData},
     bs64_string::Base64String,
@@ -13,8 +13,7 @@ use crate::common::typedefs::{
     serializable_pubkey::SerializablePubkey,
     unsigned_integer::UnsignedInteger,
 };
-
-use super::{error::IngesterError, typedefs::block_info::TransactionInfo};
+use borsh::BorshDeserialize;
 
 use self::{
     indexer_events::{CompressedAccount, PublicTransactionEvent},
@@ -24,8 +23,10 @@ use self::{
 pub mod indexer_events;
 pub mod state_update;
 
+use crate::ingester::parser::indexer_events::{
+    CompressedAccountData, MerkleTreeSequenceNumber, OutputCompressedAccountWithPackedContext,
+};
 use solana_program::pubkey;
-use crate::ingester::parser::indexer_events::{CompressedAccountData, MerkleTreeSequenceNumber, OutputCompressedAccountWithPackedContext};
 
 pub const ACCOUNT_COMPRESSION_PROGRAM_ID: Pubkey =
     pubkey!("compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq");
@@ -51,45 +52,56 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
         vec_instructions_data.push(instruction_group.outer_instruction.data);
         vec_accounts.push(instruction_group.outer_instruction.accounts.clone());
 
-        instruction_group.inner_instructions.iter().find_map(|inner_instruction| {
-            vec_instructions_data.push(inner_instruction.data.clone());
-            vec_accounts.push(
-                inner_instruction
-                    .accounts.clone()
+        instruction_group
+            .inner_instructions
+            .iter()
+            .find_map(|inner_instruction| {
+                vec_instructions_data.push(inner_instruction.data.clone());
+                vec_accounts.push(inner_instruction.accounts.clone());
+                None::<PublicTransactionEvent>
+            });
 
-            );
-            None::<PublicTransactionEvent>
-        });
-
-        let e = if enable_new_parse_logic {
-            event_from_light_transaction(&*vec_instructions_data, vec_accounts)
+        let (e, _) = if enable_new_parse_logic {
+            event_from_light_transaction(&vec_instructions_data, vec_accounts)
                 .map_err(|e| IngesterError::ParserError(e.to_string()))?
         } else {
-            None
+            (None, None)
         };
 
         if let Some(public_transaction_event) = e {
             let event = PublicTransactionEvent {
-                input_compressed_account_hashes: public_transaction_event.input_compressed_account_hashes,
-                output_compressed_account_hashes: public_transaction_event.output_compressed_account_hashes,
-                output_compressed_accounts: public_transaction_event.output_compressed_accounts.iter().map(|x| OutputCompressedAccountWithPackedContext {
-                    compressed_account: CompressedAccount {
-                        owner: x.compressed_account.owner,
-                        lamports: x.compressed_account.lamports,
-                        address: x.compressed_account.address,
-                        data: x.compressed_account.data.as_ref().map(|d| CompressedAccountData {
-                            discriminator: d.discriminator,
-                            data: d.data.clone(),
-                            data_hash: d.data_hash,
-                        }),
-                    },
-                    merkle_tree_index: x.merkle_tree_index,
-                }).collect(),
+                input_compressed_account_hashes: public_transaction_event
+                    .input_compressed_account_hashes,
+                output_compressed_account_hashes: public_transaction_event
+                    .output_compressed_account_hashes,
+                output_compressed_accounts: public_transaction_event
+                    .output_compressed_accounts
+                    .iter()
+                    .map(|x| OutputCompressedAccountWithPackedContext {
+                        compressed_account: CompressedAccount {
+                            owner: x.compressed_account.owner,
+                            lamports: x.compressed_account.lamports,
+                            address: x.compressed_account.address,
+                            data: x.compressed_account.data.as_ref().map(|d| {
+                                CompressedAccountData {
+                                    discriminator: d.discriminator,
+                                    data: d.data.clone(),
+                                    data_hash: d.data_hash,
+                                }
+                            }),
+                        },
+                        merkle_tree_index: x.merkle_tree_index,
+                    })
+                    .collect(),
                 output_leaf_indices: public_transaction_event.output_leaf_indices,
-                sequence_numbers: public_transaction_event.sequence_numbers.iter().map(|x| MerkleTreeSequenceNumber {
-                    pubkey: x.pubkey,
-                    seq: x.seq,
-                }).collect(),
+                sequence_numbers: public_transaction_event
+                    .sequence_numbers
+                    .iter()
+                    .map(|x| MerkleTreeSequenceNumber {
+                        pubkey: x.pubkey,
+                        seq: x.seq,
+                    })
+                    .collect(),
                 relay_fee: public_transaction_event.relay_fee,
                 is_compress: public_transaction_event.is_compress,
                 compression_lamports: public_transaction_event.compress_or_decompress_lamports,
@@ -99,7 +111,6 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
             let state_update = parse_public_transaction_event(tx.signature, slot, event)?;
             is_compression_transaction = true;
             state_updates.push(state_update);
-
         } else {
             for (index, instruction) in ordered_instructions.iter().enumerate() {
                 if ordered_instructions.len() - index > 3 {
@@ -113,7 +124,8 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
                     if ACCOUNT_COMPRESSION_PROGRAM_ID == instruction.program_id
                         && next_instruction.program_id == SYSTEM_PROGRAM
                         && next_next_instruction.program_id == SYSTEM_PROGRAM
-                        && next_next_next_instruction.program_id == NOOP_PROGRAM_ID {
+                        && next_next_next_instruction.program_id == NOOP_PROGRAM_ID
+                    {
                         if !logged_transaction {
                             debug!(
                                 "Indexing transaction with slot {} and id {}",
@@ -127,12 +139,12 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
                             let public_transaction_event = PublicTransactionEvent::deserialize(
                                 &mut next_next_next_instruction.data.as_slice(),
                             )
-                                .map_err(|e| {
-                                    IngesterError::ParserError(format!(
-                                        "Failed to deserialize PublicTransactionEvent: {}",
-                                        e
-                                    ))
-                                })?;
+                            .map_err(|e| {
+                                IngesterError::ParserError(format!(
+                                    "Failed to deserialize PublicTransactionEvent: {}",
+                                    e
+                                ))
+                            })?;
                             let state_update = parse_public_transaction_event(
                                 tx.signature,
                                 slot,
@@ -153,7 +165,8 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
 
                     if ACCOUNT_COMPRESSION_PROGRAM_ID == instruction.program_id
                         && next_instruction.program_id == SYSTEM_PROGRAM
-                        && next_next_instruction.program_id == NOOP_PROGRAM_ID {
+                        && next_next_instruction.program_id == NOOP_PROGRAM_ID
+                    {
                         if !logged_transaction {
                             debug!(
                                 "Indexing transaction with slot {} and id {}",
@@ -167,12 +180,12 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
                             let public_transaction_event = PublicTransactionEvent::deserialize(
                                 &mut next_next_instruction.data.as_slice(),
                             )
-                                .map_err(|e| {
-                                    IngesterError::ParserError(format!(
-                                        "Failed to deserialize PublicTransactionEvent: {}",
-                                        e
-                                    ))
-                                })?;
+                            .map_err(|e| {
+                                IngesterError::ParserError(format!(
+                                    "Failed to deserialize PublicTransactionEvent: {}",
+                                    e
+                                ))
+                            })?;
                             let state_update = parse_public_transaction_event(
                                 tx.signature,
                                 slot,
@@ -191,6 +204,7 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
                         is_compression_transaction = true;
                         if tx.error.is_none() {
                             debug!("Indexing tx with signature: {}", tx.signature);
+
                             let merkle_tree_event =
                                 MerkleTreeEvent::deserialize(&mut next_instruction.data.as_slice())
                                     .map_err(|e| {
@@ -209,7 +223,8 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
                                 }
                                 _ => {
                                     return Err(IngesterError::ParserError(
-                                        "Expected nullifier event or merkle tree update".to_string(),
+                                        "Expected nullifier event or merkle tree update"
+                                            .to_string(),
                                     ))
                                 }
                             };
