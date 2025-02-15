@@ -82,7 +82,7 @@ solana-sdk = "1.18.0"
 solana-transaction-status = "1.18.0"
 light-concurrent-merkle-tree = "=1.1.0"
 light-sdk = "0.11.0"
-light-utils = { git = "https://github.com/Lightprotocol/light-protocol", branch = "main", features = [
+light-compressed-account = { git = "https://github.com/Lightprotocol/light-protocol", branch = "jorrit/feat-add-event-queue-seq-number", features = [
     "anchor",
 ] }
 

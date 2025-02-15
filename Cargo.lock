@@ -3763,6 +3763,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "light-compressed-account"
+version = "0.1.0"
+source = "git+https://github.com/Lightprotocol/light-protocol?branch=jorrit%2Ffeat-add-event-queue-seq-number#603bd3b907f2f9843d03df327fbece34125fdb88"
+dependencies = [
+ "anchor-lang",
+ "anyhow",
+ "ark-bn254 0.5.0",
+ "ark-ff 0.5.0",
+ "borsh 0.10.3",
+ "light-hasher 1.1.0 (git+https://github.com/Lightprotocol/light-protocol?branch=jorrit%2Ffeat-add-event-queue-seq-number)",
+ "light-zero-copy",
+ "num-bigint 0.4.6",
+ "rand 0.8.5",
+ "solana-program",
+ "thiserror 2.0.11",
+ "zerocopy 0.8.14",
+]
+
+[[package]]
 name = "light-concurrent-merkle-tree"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3772,7 +3791,7 @@ dependencies = [
  "bytemuck",
  "light-bounded-vec",
  "light-hasher 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "light-utils 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "light-utils",
  "memoffset 0.9.1",
  "thiserror 1.0.58",
 ]
@@ -3794,7 +3813,7 @@ dependencies = [
 [[package]]
 name = "light-hasher"
 version = "1.1.0"
-source = "git+https://github.com/Lightprotocol/light-protocol?branch=main#c143c24f95c901e2eac96bc2bd498719958192cf"
+source = "git+https://github.com/Lightprotocol/light-protocol?branch=jorrit%2Ffeat-add-event-queue-seq-number#603bd3b907f2f9843d03df327fbece34125fdb88"
 dependencies = [
  "ark-bn254 0.5.0",
  "light-poseidon 0.3.0",
@@ -3824,7 +3843,7 @@ dependencies = [
  "light-concurrent-merkle-tree",
  "light-hasher 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "light-merkle-tree-reference",
- "light-utils 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "light-utils",
  "memoffset 0.9.1",
  "num-bigint 0.4.6",
  "num-traits",
@@ -3902,7 +3921,7 @@ dependencies = [
  "light-hasher 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "light-indexed-merkle-tree",
  "light-merkle-tree-reference",
- "light-utils 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "light-utils",
  "log",
  "num-bigint 0.4.6",
  "num-traits",
@@ -3934,7 +3953,7 @@ dependencies = [
  "light-indexed-merkle-tree",
  "light-macros",
  "light-sdk-macros 0.3.0",
- "light-utils 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "light-utils",
  "light-verifier",
  "num-bigint 0.4.6",
  "solana-program",
@@ -3958,7 +3977,7 @@ dependencies = [
  "light-indexed-merkle-tree",
  "light-macros",
  "light-sdk-macros 0.4.0",
- "light-utils 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "light-utils",
  "light-verifier",
  "num-bigint 0.4.6",
  "solana-program",
@@ -4008,25 +4027,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "light-utils"
-version = "1.1.0"
-source = "git+https://github.com/Lightprotocol/light-protocol?branch=main#c143c24f95c901e2eac96bc2bd498719958192cf"
-dependencies = [
- "anchor-lang",
- "anyhow",
- "ark-bn254 0.5.0",
- "ark-ff 0.5.0",
- "borsh 0.10.3",
- "light-hasher 1.1.0 (git+https://github.com/Lightprotocol/light-protocol?branch=main)",
- "light-zero-copy",
- "num-bigint 0.4.6",
- "rand 0.8.5",
- "solana-program",
- "thiserror 2.0.11",
- "zerocopy 0.8.14",
-]
-
-[[package]]
 name = "light-verifier"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4041,7 +4041,7 @@ dependencies = [
 [[package]]
 name = "light-zero-copy"
 version = "0.1.0"
-source = "git+https://github.com/Lightprotocol/light-protocol?branch=main#c143c24f95c901e2eac96bc2bd498719958192cf"
+source = "git+https://github.com/Lightprotocol/light-protocol?branch=jorrit%2Ffeat-add-event-queue-seq-number#603bd3b907f2f9843d03df327fbece34125fdb88"
 dependencies = [
  "thiserror 2.0.11",
  "zerocopy 0.8.14",
@@ -4848,10 +4848,10 @@ dependencies = [
  "jsonrpsee-core",
  "lazy_static",
  "light-client",
+ "light-compressed-account",
  "light-concurrent-merkle-tree",
  "light-poseidon 0.2.0",
  "light-sdk 0.11.0",
- "light-utils 1.1.0 (git+https://github.com/Lightprotocol/light-protocol?branch=main)",
  "log",
  "lru 0.12.4",
  "num-bigint 0.4.6",

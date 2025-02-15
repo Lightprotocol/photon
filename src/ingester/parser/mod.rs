@@ -1,6 +1,6 @@
 use byteorder::{ByteOrder, LittleEndian};
 use indexer_events::{IndexedMerkleTreeEvent, MerkleTreeEvent, NullifierEvent};
-use light_utils::instruction::event::event_from_light_transaction;
+use light_compressed_account::event::event_from_light_transaction;
 use log::debug;
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 use state_update::{IndexedTreeLeafUpdate, LeafNullification};
@@ -61,14 +61,15 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
                 None::<PublicTransactionEvent>
             });
 
-        let (e, _) = if enable_new_parse_logic {
+        let e = if enable_new_parse_logic {
             event_from_light_transaction(&vec_instructions_data, vec_accounts)
                 .map_err(|e| IngesterError::ParserError(e.to_string()))?
         } else {
-            (None, None)
+            None
         };
 
         if let Some(public_transaction_event) = e {
+            let public_transaction_event = public_transaction_event.event;
             let event = PublicTransactionEvent {
                 input_compressed_account_hashes: public_transaction_event
                     .input_compressed_account_hashes,
