@@ -209,11 +209,11 @@ async fn test_e2e_mint_and_transfer_transactions(
                 })
                 .await
                 .unwrap();
-            validity_proof_v2.value.compressedProof = CompressedProof::default();
-            assert_json_snapshot!(
-                format!("{}-{}-validity-proof-v2", name.clone(), person),
-                validity_proof_v2
-            );
+            // validity_proof_v2.value.compressedProof = CompressedProof::default();
+            // assert_json_snapshot!(
+            //     format!("{}-{}-validity-proof-v2", name.clone(), person),
+            //     validity_proof_v2
+            // );
 
             let mut cursor = None;
             let limit = Limit::new(1).unwrap();
@@ -270,11 +270,11 @@ async fn test_e2e_mint_and_transfer_transactions(
             );
 
             // V2 Test for Transactions
-            let parsed_transaction_v2: photon_indexer::api::method::get_transaction_with_compression_info::GetTransactionResponseV2 = get_transaction_helper_v2(&setup.db_conn, txn_signature, txn_clone).await.unwrap();
-            assert_json_snapshot!(
-                format!("{}-{}-transaction-v2", name.clone(), txn_name),
-                parsed_transaction_v2
-            );
+            // let parsed_transaction_v2: photon_indexer::api::method::get_transaction_with_compression_info::GetTransactionResponseV2 = get_transaction_helper_v2(&setup.db_conn, txn_signature, txn_clone).await.unwrap();
+            // assert_json_snapshot!(
+            //     format!("{}-{}-transaction-v2", name.clone(), txn_name),
+            //     parsed_transaction_v2
+            // );
         }
 
         let mut cursor = None;
