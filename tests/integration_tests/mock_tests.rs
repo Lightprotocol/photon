@@ -9,7 +9,7 @@ use photon_indexer::api::method::get_compressed_balance_by_owner::GetCompressedB
 use photon_indexer::api::method::get_compressed_token_balances_by_owner::GetCompressedTokenBalancesByOwnerRequest;
 use photon_indexer::api::method::get_multiple_compressed_accounts::GetMultipleCompressedAccountsRequest;
 use photon_indexer::api::method::get_validity_proof::{
-    get_validity_proof, GetValidityProofRequest,
+    get_validity_proof, get_validity_proof_v2, GetValidityProofRequest,
 };
 use photon_indexer::api::method::utils::{
     CompressedAccountRequest, GetCompressedTokenAccountsByDelegate,
@@ -145,12 +145,17 @@ async fn test_persist_state_update_basic(
 
     assert_eq!(null_value.value, None);
 }
-
 #[named]
 #[rstest]
 #[tokio::test]
 #[serial]
-// Test V1 accounts with V1 and V2 endpoints.
+// Test V1 accounts with V1 and V2 endpoints:
+// get_compressed_accounts_by_owner
+// get_compressed_accounts_by_owner_v2
+// get_multiple_compressed_accounts
+// get_multiple_compressed_accounts_v2
+// get_compressed_account
+// get_compressed_account_v2
 async fn test_multiple_accounts(
     #[values(DatabaseBackend::Sqlite, DatabaseBackend::Postgres)] db_backend: DatabaseBackend,
 ) {
@@ -372,12 +377,45 @@ async fn test_multiple_accounts(
         &mut res_v2.items.iter().map(|x| x.clone().unwrap()).collect(),
         &mut accounts_of_interest,
     );
+
+    for account in accounts.iter() {
+        let request = CompressedAccountRequest {
+            address: account.account.address.clone(),
+            hash: Some(account.account.hash.clone()),
+        };
+
+        let res = setup
+            .api
+            .get_compressed_account(request.clone())
+            .await
+            .unwrap()
+            .value;
+
+        assert_eq!(res, Some(account.account.clone()));
+
+        let res_v2 = setup
+            .api
+            .get_compressed_account_v2(request)
+            .await
+            .unwrap()
+            .value;
+
+        compare_account_with_account_v2(&res.unwrap(), &res_v2.unwrap());
+    }
 }
 
 #[named]
 #[rstest]
 #[tokio::test]
 #[serial]
+// Test V1 token accounts with V1 and V2 endpoints:
+// get_compressed_token_accounts_by_owner
+// get_compressed_token_accounts_by_owner_v2
+// get_compressed_token_balances_by_owner
+// get_compressed_token_balances_by_owner_v2
+// get_compressed_token_account_balance
+// get_compressed_token_accounts_by_delegate
+// get_compressed_token_accounts_by_delegate_v2
 async fn test_persist_token_data(
     #[values(DatabaseBackend::Sqlite, DatabaseBackend::Postgres)] db_backend: DatabaseBackend,
 ) {
@@ -555,6 +593,20 @@ async fn test_persist_token_data(
         .value;
     verify_response_matches_input_token_data(res.clone(), owner_tlv);
 
+    let res_v2 = setup
+        .api
+        .get_compressed_token_accounts_by_owner_v2(GetCompressedTokenAccountsByOwner {
+            owner: owner1,
+            mint: Some(mint1),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .value;
+    for (item, item_v2) in res.items.iter().zip(res_v2.items.iter()) {
+        compare_token_account_with_token_account_v2(item, item_v2);
+    }
+
     for owner in [owner2] {
         let owner_tlv = all_token_data
             .iter()
@@ -570,6 +622,20 @@ async fn test_persist_token_data(
             .await
             .unwrap()
             .value;
+
+        let res_v2 = setup
+            .api
+            .get_compressed_token_accounts_by_owner_v2(GetCompressedTokenAccountsByOwner {
+                owner,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .value;
+
+        for (item, item_v2) in res.items.iter().zip(res_v2.items.iter()) {
+            compare_token_account_with_token_account_v2(item, item_v2);
+        }
 
         let mut paginated_res = Vec::new();
         let mut cursor = None;
@@ -592,7 +658,10 @@ async fn test_persist_token_data(
                 break;
             }
         }
-        assert_eq!(paginated_res, res.items);
+
+        for (item, item_v2) in paginated_res.iter().zip(res_v2.items.iter()) {
+            compare_token_account_with_token_account_v2(item, item_v2);
+        }
 
         let mut mint_to_balance: HashMap<SerializablePubkey, u64> = HashMap::new();
 
@@ -642,12 +711,14 @@ async fn test_persist_token_data(
         }
     }
     for delegate in [delegate1, delegate2] {
-        let delegate_tlv = all_token_data
+        let delegate_tlv: Vec<TokenDataWithHash> = all_token_data
             .clone()
             .into_iter()
             .filter(|x| x.token_data.delegate == Some(delegate))
             .collect();
-        let res = setup
+
+        // V1 Endpoint
+        let res_v1 = setup
             .api
             .get_compressed_token_accounts_by_delegate(GetCompressedTokenAccountsByDelegate {
                 delegate,
@@ -656,7 +727,8 @@ async fn test_persist_token_data(
             .await
             .unwrap()
             .value;
-        let mut paginated_res = Vec::new();
+
+        let mut paginated_res_v1 = Vec::new();
         let mut cursor = None;
         loop {
             let res = setup
@@ -671,14 +743,51 @@ async fn test_persist_token_data(
                 .unwrap()
                 .value;
 
-            paginated_res.extend(res.items.clone());
+            paginated_res_v1.extend(res.items.clone());
             cursor = res.cursor;
             if cursor.is_none() {
                 break;
             }
         }
-        assert_eq!(paginated_res, res.items);
-        verify_response_matches_input_token_data(res, delegate_tlv);
+        assert_eq!(paginated_res_v1, res_v1.items);
+        verify_response_matches_input_token_data(res_v1.clone(), delegate_tlv.clone());
+
+        // V2 Endpoint
+        let res_v2 = setup
+            .api
+            .get_compressed_token_accounts_by_delegate_v2(GetCompressedTokenAccountsByDelegate {
+                delegate: delegate.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .value;
+
+        let mut paginated_res_v2 = Vec::new();
+        let mut cursor = None;
+        loop {
+            let res = setup
+                .api
+                .get_compressed_token_accounts_by_delegate_v2(
+                    GetCompressedTokenAccountsByDelegate {
+                        delegate,
+                        cursor: cursor.clone(),
+                        limit: Some(photon_indexer::api::method::utils::Limit::new(1).unwrap()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .value;
+
+            paginated_res_v2.extend(res.items.clone());
+            cursor = res.cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(paginated_res_v2, res_v2.items);
+        verify_response_matches_input_token_data_v2(res_v2, delegate_tlv);
     }
 
     for (mint, owner_to_balance) in mint_to_owner_to_balance.iter() {
@@ -1035,7 +1144,7 @@ async fn test_get_multiple_new_address_proofs_interop(
     .unwrap();
 
     insta::assert_json_snapshot!(name.clone(), proof_v2);
-    let mut validity_proof_v2 = get_validity_proof(
+    let mut validity_proof_v2 = get_validity_proof_v2(
         &setup.db_conn,
         &setup.prover_url,
         GetValidityProofRequest {

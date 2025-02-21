@@ -1,6 +1,7 @@
 use std::{env, path::Path, str::FromStr, sync::Mutex};
 
 use once_cell::sync::Lazy;
+use photon_indexer::api::method::utils::{TokenAccount, TokenAccountListV2, TokenAccountV2};
 use photon_indexer::common::typedefs::account::AccountV2;
 use photon_indexer::common::typedefs::hash::Hash;
 use photon_indexer::migration::{MigractorWithCustomMigrations, MigratorTrait};
@@ -348,6 +349,32 @@ pub fn verify_response_matches_input_token_data(
         );
     }
 }
+
+pub fn verify_response_matches_input_token_data_v2(
+    response: TokenAccountListV2,
+    tlvs: Vec<TokenDataWithHash>,
+) {
+    if response.items.len() != tlvs.len() {
+        panic!(
+            "Mismatch in number of accounts. Expected: {}, Actual: {}",
+            tlvs.len(),
+            response.items.len()
+        );
+    }
+    let token_accounts = response.items;
+    for (account, tlv) in token_accounts.iter().zip(order_token_datas(tlvs).iter()) {
+        let account = account.clone();
+        assert_eq!(account.token_data.mint, tlv.token_data.mint);
+        assert_eq!(account.token_data.owner, tlv.token_data.owner);
+        assert_eq!(account.token_data.amount, tlv.token_data.amount);
+        assert_eq!(
+            account.token_data.delegate,
+            tlv.token_data.delegate.map(Into::into)
+        );
+        assert_eq!(account.token_data.state, tlv.token_data.state);
+    }
+}
+
 pub fn assert_account_response_list_matches_input(
     account_response: &mut Vec<Account>,
     input_accounts: &mut Vec<Account>,
@@ -381,6 +408,21 @@ pub fn compare_account_with_account_v2(account: &Account, account_v2: &AccountV2
     assert_eq!(account.seq, account_v2.seq);
     assert_eq!(account.slot_created, account_v2.slot_created);
     assert_eq!(account_v2.queue, None);
+}
+
+pub fn compare_token_account_with_token_account_v2(
+    token_acc: &TokenAccount,
+    token_acc_v2: &TokenAccountV2,
+) {
+    compare_account_with_account_v2(&token_acc.account, &token_acc_v2.account);
+    assert_eq!(token_acc.token_data.mint, token_acc_v2.token_data.mint);
+    assert_eq!(token_acc.token_data.owner, token_acc_v2.token_data.owner);
+    assert_eq!(token_acc.token_data.amount, token_acc_v2.token_data.amount);
+    assert_eq!(
+        token_acc.token_data.delegate,
+        token_acc_v2.token_data.delegate
+    );
+    assert_eq!(token_acc.token_data.state, token_acc_v2.token_data.state);
 }
 
 /// Persist using a database connection instead of a transaction. Should only be use for tests.
