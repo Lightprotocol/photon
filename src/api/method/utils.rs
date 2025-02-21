@@ -193,6 +193,7 @@ pub fn parse_account_model_v2(account: accounts::Model) -> Result<AccountV2, Pho
         slot_created: UnsignedInteger(account.slot_created as u64),
         seq: account.seq.map(|seq| UnsignedInteger(seq as u64)),
         queue: account.queue.map(|queue| queue.try_into()).transpose()?,
+        prove_by_index: account.in_output_queue,
     })
 }
 

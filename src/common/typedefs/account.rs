@@ -43,6 +43,12 @@ pub struct AccountV2 {
     pub slot_created: UnsignedInteger,
     // nullifier_queue in legacy trees, output_queue in V2 trees.
     pub queue: Option<SerializablePubkey>,
+    // Indicates if the account is not yet provable by validity_proof. The
+    // account resides in on-chain RAM, with leaf_index mapping to its position.
+    // This allows the protocol to prove the account's validity using only the
+    // leaf_index. Consumers use this to decide if a validity proof is needed,
+    // saving one RPC roundtrip.
+    pub prove_by_index: bool,
 }
 
 /// This is currently used internally:

@@ -310,6 +310,7 @@ pub async fn get_transaction_helper_v2(
             seq: x.account.seq,
             slot_created: x.account.slot_created,
             queue: x.context.queue,
+            prove_by_index: x.context.in_output_queue,
         })
         .collect::<Vec<AccountV2>>();
 
@@ -327,6 +328,7 @@ pub async fn get_transaction_helper_v2(
             seq: x.account.seq,
             slot_created: x.account.slot_created,
             queue: x.context.queue,
+            prove_by_index: x.context.in_output_queue,
         })
         .collect::<Vec<AccountV2>>();
 
