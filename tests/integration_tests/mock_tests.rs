@@ -1,3 +1,4 @@
+use crate::utils::compare_account_with_account_v2;
 use crate::utils::*;
 use ::borsh::{to_vec, BorshDeserialize, BorshSerialize};
 use function_name::named;
@@ -27,7 +28,9 @@ use photon_indexer::ingester::persist::persisted_state_tree::{
 };
 use sea_orm::{QueryFilter, TransactionTrait};
 
-use photon_indexer::common::typedefs::account::{Account, AccountContext, AccountWithContext};
+use photon_indexer::common::typedefs::account::{
+    Account, AccountContext, AccountV2, AccountWithContext,
+};
 use photon_indexer::common::typedefs::bs64_string::Base64String;
 use photon_indexer::common::typedefs::{hash::Hash, serializable_pubkey::SerializablePubkey};
 use photon_indexer::dao::generated::accounts;
@@ -147,6 +150,7 @@ async fn test_persist_state_update_basic(
 #[rstest]
 #[tokio::test]
 #[serial]
+// Test V1 accounts with V1 and V2 endpoints.
 async fn test_multiple_accounts(
     #[values(DatabaseBackend::Sqlite, DatabaseBackend::Postgres)] db_backend: DatabaseBackend,
 ) {
@@ -170,6 +174,7 @@ async fn test_multiple_accounts(
     let owner1 = SerializablePubkey::new_unique();
     let owner2 = SerializablePubkey::new_unique();
     let mut state_update = StateUpdate::default();
+
     let accounts = vec![
         AccountWithContext {
             account: Account {
@@ -309,6 +314,21 @@ async fn test_multiple_accounts(
             .value;
 
         assert_eq!(res.0, total_balance);
+
+        // V2 Endpoint
+        let res_v2 = setup
+            .api
+            .get_compressed_accounts_by_owner_v2(GetCompressedAccountsByOwnerRequest {
+                owner,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .value;
+
+        for (account, account_v2) in response_accounts.iter().zip(res_v2.items.iter()) {
+            compare_account_with_account_v2(account, account_v2);
+        }
     }
 
     let mut accounts_of_interest = vec![accounts[0].account.clone(), accounts[2].account.clone()];
@@ -329,6 +349,27 @@ async fn test_multiple_accounts(
 
     assert_account_response_list_matches_input(
         &mut res.items.iter().map(|x| x.clone().unwrap()).collect(),
+        &mut accounts_of_interest,
+    );
+
+    // V2 Endpoint
+    let res_v2 = setup
+        .api
+        .get_multiple_compressed_accounts_v2(GetMultipleCompressedAccountsRequest {
+            addresses: None,
+            hashes: Some(
+                accounts_of_interest
+                    .iter()
+                    .map(|x| x.hash.clone())
+                    .collect(),
+            ),
+        })
+        .await
+        .unwrap()
+        .value;
+
+    assert_account_response_list_matches_input_v2(
+        &mut res_v2.items.iter().map(|x| x.clone().unwrap()).collect(),
         &mut accounts_of_interest,
     );
 }

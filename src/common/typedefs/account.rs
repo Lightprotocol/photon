@@ -45,6 +45,11 @@ pub struct AccountV2 {
     pub queue: Option<SerializablePubkey>,
 }
 
+/// This is currently used internally:
+/// - Internal (state_updates,..)
+/// - GetTransactionWithCompressionInfo (internally)
+/// - GetTransactionWithCompressionInfoV2 (internally)
+/// All endpoints return AccountV2.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccountContext {

@@ -93,6 +93,7 @@ impl<'__s> ToSchema<'__s> for GetTransactionResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[allow(non_snake_case)]
 pub struct AccountWithOptionalTokenDataV2 {
     pub account: AccountV2,
     pub optionalTokenData: Option<TokenData>,

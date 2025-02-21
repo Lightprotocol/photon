@@ -1,6 +1,7 @@
 use std::{env, path::Path, str::FromStr, sync::Mutex};
 
 use once_cell::sync::Lazy;
+use photon_indexer::common::typedefs::account::AccountV2;
 use photon_indexer::common::typedefs::hash::Hash;
 use photon_indexer::migration::{MigractorWithCustomMigrations, MigratorTrait};
 use photon_indexer::{
@@ -355,6 +356,31 @@ pub fn assert_account_response_list_matches_input(
     account_response.sort_by(|a, b| a.hash.to_vec().cmp(&b.hash.to_vec()));
     input_accounts.sort_by(|a, b| a.hash.to_vec().cmp(&b.hash.to_vec()));
     assert_eq!(account_response, input_accounts);
+}
+pub fn assert_account_response_list_matches_input_v2(
+    account_response_v2: &mut Vec<AccountV2>,
+    input_accounts: &mut Vec<Account>,
+) {
+    assert_eq!(account_response_v2.len(), input_accounts.len());
+    account_response_v2.sort_by(|a, b| a.hash.to_vec().cmp(&b.hash.to_vec()));
+    input_accounts.sort_by(|a, b| a.hash.to_vec().cmp(&b.hash.to_vec()));
+
+    for (account_v2, account) in account_response_v2.iter().zip(input_accounts.iter()) {
+        compare_account_with_account_v2(account, account_v2);
+    }
+}
+
+pub fn compare_account_with_account_v2(account: &Account, account_v2: &AccountV2) {
+    assert_eq!(account.hash, account_v2.hash);
+    assert_eq!(account.address, account_v2.address);
+    assert_eq!(account.data, account_v2.data);
+    assert_eq!(account.owner, account_v2.owner);
+    assert_eq!(account.lamports, account_v2.lamports);
+    assert_eq!(account.tree, account_v2.tree);
+    assert_eq!(account.leaf_index, account_v2.leaf_index);
+    assert_eq!(account.seq, account_v2.seq);
+    assert_eq!(account.slot_created, account_v2.slot_created);
+    assert_eq!(account_v2.queue, None);
 }
 
 /// Persist using a database connection instead of a transaction. Should only be use for tests.
