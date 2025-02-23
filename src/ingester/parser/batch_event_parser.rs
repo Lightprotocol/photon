@@ -25,13 +25,6 @@ use solana_sdk::signature::Signature;
 pub enum BatchEvent {
     BatchAppend(BatchAppendEvent),
     BatchNullify(BatchNullifyEvent),
-    Empty,
-}
-
-impl Default for BatchEvent {
-    fn default() -> Self {
-        BatchEvent::Empty
-    }
 }
 
 pub type IndexedBatchEvents = HashMap<[u8; 32], Vec<(u64, BatchEvent)>>;

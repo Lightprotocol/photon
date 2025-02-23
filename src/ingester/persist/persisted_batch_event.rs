@@ -30,9 +30,6 @@ pub async fn persist_batch_events(
             BatchEvent::BatchAppend(batch_append_event) => {
                 persist_batch_append_event(txn, batch_append_event, &mut leaf_nodes).await
             }
-            _ => {
-                return Err(IngesterError::EmptyBatchEvent);
-            }
         }?;
     }
     persist_leaf_nodes(txn, leaf_nodes).await?;

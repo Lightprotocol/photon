@@ -41,7 +41,7 @@ use std::sync::Arc;
 #[rstest]
 #[tokio::test]
 #[serial]
-async fn test_batched_tree_transactions(
+async fn test_batched_state_50txs(
     #[values(DatabaseBackend::Sqlite)] db_backend: DatabaseBackend,
 ) {
     let trim_test_name = trim_test_name(function_name!());

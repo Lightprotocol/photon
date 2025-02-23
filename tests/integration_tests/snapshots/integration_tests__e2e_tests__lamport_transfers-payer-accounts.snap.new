@@ -1,0 +1,14 @@
+---
+source: tests/integration_tests/e2e_tests.rs
+assertion_line: 379
+expression: accounts
+---
+{
+  "context": {
+    "slot": 0
+  },
+  "value": {
+    "items": [],
+    "cursor": null
+  }
+}
