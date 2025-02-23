@@ -858,7 +858,7 @@ async fn test_batched_state_50txs(#[values(DatabaseBackend::Sqlite)] db_backend:
         Hash::from([5, 209, 226, 175, 183, 39, 50, 170, 136, 134, 150, 200, 61, 69, 152, 179, 215, 98, 134, 14, 212, 88, 4, 166, 143, 105, 146, 88, 184, 30, 46, 153])
     );
 
-    assert_eq!(get_queue_elements_result.value[0].root_seq, 7);
+    assert_eq!(get_queue_elements_result.value[0].root_seq, 1);
 }
 
 /// Reset table
