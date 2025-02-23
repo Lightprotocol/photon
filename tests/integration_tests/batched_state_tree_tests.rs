@@ -847,7 +847,7 @@ async fn test_batched_state_50txs(#[values(DatabaseBackend::Sqlite)] db_backend:
             merkle_tree: merkle_tree_pubkey.to_bytes().into(),
             start_offset: None,
             queue_type: QueueType::BatchedOutput as u8,
-            num_elements: 1000,
+            num_elements: 10,
         })
         .await
         .unwrap();
@@ -859,6 +859,20 @@ async fn test_batched_state_50txs(#[values(DatabaseBackend::Sqlite)] db_backend:
     );
 
     assert_eq!(get_queue_elements_result.value[0].root_seq, 1);
+
+    println!("get_queue_elements_result {:?}", get_queue_elements_result.value);
+    let hashes = get_queue_elements_result.value.iter().map(|x| x.leaf.clone()).collect::<Vec<_>>();
+
+    let validity_proof = setup
+            .api
+            .get_validity_proof_v2(GetValidityProofRequest {
+                hashes,
+                newAddressesWithTrees: vec![],
+                newAddresses: vec![],
+            })
+            .await
+            .unwrap();
+    println!("validity_proof {:?}", validity_proof.value);
 }
 
 /// Reset table
@@ -901,7 +915,7 @@ pub async fn index(
 
             if index_transactions_individually {
                 for tx in txs {
-                    index_transaction(test_name, db_conn.clone(), rpc_client.clone(), &tx).await;
+                    index_transaction(test_name, db_conn.clone(), rpc_client.clone(), tx).await;
                 }
             } else {
                 index_multiple_transactions(
