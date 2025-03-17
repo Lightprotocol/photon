@@ -45,10 +45,12 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
         if let Some(event) =
             parse_public_transaction_event_v2(&program_ids, &vec_instructions_data, vec_accounts)
         {
+            println!("parsed parse_public_transaction_event_v2: {:?}", event);
             let state_update = create_state_update(tx.signature, slot, event)?;
             is_compression_transaction = true;
             state_updates.push(state_update);
         } else {
+            println!("parsed parse_public_transaction_event_v2: None");
             for (index, _) in ordered_instructions.iter().enumerate() {
                 if ordered_instructions.len() - index > 2 {
                     if let Some(state_update) = parse_legacy_public_transaction_event(

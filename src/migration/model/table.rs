@@ -106,3 +106,13 @@ pub enum StateTreeHistories {
     TransactionSignature,
     LeafIdx,
 }
+
+
+#[derive(Copy, Clone, Iden)]
+pub enum AddressQueues {
+    Table,
+    Tree,
+    Queue,
+    Address,
+    Seq,
+}

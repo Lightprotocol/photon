@@ -12,3 +12,4 @@ pub mod state_trees;
 pub mod token_accounts;
 pub mod token_owner_balances;
 pub mod transactions;
+pub mod address_queue;

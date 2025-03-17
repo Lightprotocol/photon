@@ -39,11 +39,11 @@ lazy_static! {
 }
 
 pub fn compute_range_node_hash(node: &indexed_trees::Model) -> Result<Hash, IngesterError> {
-    let mut poseidon = Poseidon::<Fr>::new_circom(3).unwrap();
-    let next_index = node.next_index.to_be_bytes();
+    let mut poseidon = Poseidon::<Fr>::new_circom(2).unwrap();
+    // let next_index = node.next_index.to_be_bytes();
     Hash::try_from(
         poseidon
-            .hash_bytes_be(&[&node.value, &next_index, &node.next_value])
+            .hash_bytes_be(&[&node.value, &node.next_value])
             .map_err(|e| IngesterError::ParserError(format!("Failed  to compute hash: {}", e)))
             .map(|x| x.to_vec())?,
     )
@@ -84,6 +84,7 @@ pub async fn get_exclusion_range_with_proof(
     tree_height: u32,
     value: Vec<u8>,
 ) -> Result<(indexed_trees::Model, MerkleProofWithContext), PhotonApiError> {
+    println!("get_exclusion_range_with_proof tree: {:?} tree_height: {:?} value: {:?}", tree, tree_height, value);
     let btree = query_next_smallest_elements(txn, vec![value.clone()], tree.clone())
         .await
         .map_err(|e| {
@@ -97,17 +98,19 @@ pub async fn get_exclusion_range_with_proof(
         let zeroeth_element_hash = compute_range_node_hash(&zeroeth_element).map_err(|e| {
             PhotonApiError::UnexpectedError(format!("Failed to compute hash: {}", e))
         })?;
-        let top_element = get_top_element(tree.clone());
-        let top_element_hash = compute_range_node_hash(&top_element).map_err(|e| {
-            PhotonApiError::UnexpectedError(format!("Failed to compute hash: {}", e))
-        })?;
-        let mut proof: Vec<Hash> = vec![top_element_hash.clone()];
-        for i in 1..(tree_height - 1) {
+        // let top_element = get_top_element(tree.clone());
+        // let top_element_hash = compute_range_node_hash(&top_element).map_err(|e| {
+        //     PhotonApiError::UnexpectedError(format!("Failed to compute hash: {}", e))
+        // })?;
+        // let mut proof: Vec<Hash> = vec![top_element_hash.clone()];
+        let mut proof: Vec<Hash> = vec![];
+        for i in 0..(tree_height - 1) {
             let hash = Hash::try_from(ZERO_BYTES[i as usize]).map_err(|e| {
                 PhotonApiError::UnexpectedError(format!("Failed to convert hash: {}", e))
             })?;
             proof.push(hash);
         }
+
         let mut root = zeroeth_element_hash.clone().to_vec();
 
         for elem in proof.iter() {
@@ -129,9 +132,12 @@ pub async fn get_exclusion_range_with_proof(
             // HACK: Fixed value while not supporting forester.
             root_seq: 3,
         };
+        println!("validating merkle proof");
         merkle_proof.validate()?;
+        println!("merkle proof validated");
         return Ok((zeroeth_element, merkle_proof));
     }
+
     let range_node = btree.values().next().ok_or(PhotonApiError::RecordNotFound(
         "No range proof found".to_string(),
     ))?;

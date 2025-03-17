@@ -3,12 +3,13 @@ use crate::ingester::parser::indexer_events::{
     BatchPublicTransactionEvent, CompressedAccount, CompressedAccountData,
     MerkleTreeSequenceNumber, OutputCompressedAccountWithPackedContext, PublicTransactionEvent,
 };
-use crate::ingester::parser::state_update::StateUpdate;
+use crate::ingester::parser::state_update::{AddressQueueUpdate, StateUpdate};
 use crate::ingester::parser::tx_event_parser::parse_public_transaction_event;
 
 use light_compressed_account::indexer_event::parse::event_from_light_transaction;
 use solana_program::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
+use crate::ingester::parser::tree_info::TreeInfo;
 
 pub fn parse_public_transaction_event_v2(
     program_ids: &[Pubkey],
@@ -107,7 +108,24 @@ pub fn create_state_update(
         state_update_event
             .input_context
             .extend(event.batch_input_accounts.clone());
+
+        for (new_address, seq) in event.new_addresses.iter().zip(event.address_sequence_numbers.iter()) {
+            let tree_info = TreeInfo::get(&new_address.mt_pubkey.to_string())
+                .ok_or(IngesterError::ParserError("Missing queue".to_string()))?
+                .clone();
+            state_update_event.addresses.push(AddressQueueUpdate {
+                tree: tree_info.tree.into(),
+                queue: tree_info.queue.into(),
+                address: new_address.address,
+                seq: seq.seq,
+            });
+        }
+
+        println!("state_update_event.addresses: {:?}", state_update_event.addresses);
         state_updates.push(state_update_event);
     }
-    Ok(StateUpdate::merge_updates(state_updates))
+
+    let merged = StateUpdate::merge_updates(state_updates);
+    println!("merged addresses: {:?}", merged.addresses);
+    Ok(merged)
 }

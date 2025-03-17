@@ -25,6 +25,7 @@ impl MerkleProofWithContext {
         );
         let leaf_index = self.leaf_index;
         let tree_height = (self.proof.len() + 1) as u32;
+        println!("validate tree_height: {}", tree_height);
         let node_index = leaf_index_to_node_index(leaf_index, tree_height);
         let mut computed_root = self.hash.to_vec();
         info!("leaf_index: {}, node_index: {}", leaf_index, node_index);

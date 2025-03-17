@@ -6,6 +6,9 @@ use light_compressed_account::indexer_event::event::BatchNullifyContext;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use std::collections::{HashMap, HashSet};
+use jsonrpsee_core::Serialize;
+use utoipa::ToSchema;
+use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 
 #[derive(BorshDeserialize, BorshSerialize, Debug, Clone, PartialEq, Eq)]
 pub struct PathNode {
@@ -60,6 +63,15 @@ pub struct IndexedTreeLeafUpdate {
     pub seq: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema, Default)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AddressQueueUpdate {
+    pub tree: SerializablePubkey,
+    pub queue: SerializablePubkey,
+    pub address: [u8; 32],
+    pub seq: u64,
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 /// Representation of state update of the compression system that is optimal for simple persistence.
 pub struct StateUpdate {
@@ -71,6 +83,7 @@ pub struct StateUpdate {
     pub indexed_merkle_tree_updates: HashMap<(Pubkey, u64), IndexedTreeLeafUpdate>,
     pub batch_events: IndexedBatchEvents,
     pub input_context: Vec<BatchNullifyContext>,
+    pub addresses: Vec<AddressQueueUpdate>,
 }
 
 impl StateUpdate {
@@ -102,6 +115,8 @@ impl StateUpdate {
                     merged.indexed_merkle_tree_updates.insert(key, value);
                 }
             }
+
+            merged.addresses.extend(update.addresses);
 
             merged.input_context.extend(update.input_context);
 

@@ -73,6 +73,7 @@ pub fn parse_public_transaction_event(
         }
     }
 
+
     if !has_batched_instructions {
         tree_to_seq_number = sequence_numbers
             .iter()
@@ -83,6 +84,7 @@ pub fn parse_public_transaction_event(
     for hash in input_compressed_account_hashes {
         state_update.in_accounts.insert(hash.into());
     }
+
 
     for ((out_account, hash), leaf_index) in output_compressed_accounts
         .into_iter()
@@ -125,6 +127,7 @@ pub fn parse_public_transaction_event(
         state_update.out_accounts.push(enriched_account);
     }
 
+
     state_update
         .account_transactions
         .extend(
@@ -148,6 +151,8 @@ pub fn parse_public_transaction_event(
                     signature: tx,
                 }),
         );
+
+
 
     Ok(state_update)
 }

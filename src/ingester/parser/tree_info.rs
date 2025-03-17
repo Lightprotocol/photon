@@ -4,8 +4,6 @@ use solana_program::pubkey;
 use solana_program::pubkey::Pubkey;
 use std::collections::HashMap;
 
-pub const DEFAULT_TREE_HEIGHT: u32 = 32 + 1;
-
 #[derive(Debug, Clone)]
 pub struct TreeInfo {
     pub tree: Pubkey,
@@ -189,6 +187,17 @@ lazy_static! {
                 tree_type: TreeType::State,
             },
         );
+
+         m.insert(
+            "EzKE84aVTkCUhDHLELqyJaq1Y7UVVmqxXqZjVHwHY3rK".to_string(),
+            TreeInfo {
+                tree: pubkey!("EzKE84aVTkCUhDHLELqyJaq1Y7UVVmqxXqZjVHwHY3rK"),
+                queue: pubkey!("EzKE84aVTkCUhDHLELqyJaq1Y7UVVmqxXqZjVHwHY3rK"),
+                height: 40,
+                tree_type: TreeType::BatchedAddress,
+            },
+        );
+
 
         m
     };

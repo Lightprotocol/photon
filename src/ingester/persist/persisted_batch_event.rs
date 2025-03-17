@@ -1,6 +1,6 @@
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
-use crate::dao::generated::accounts;
+use crate::dao::generated::{accounts, address_queue};
 use crate::ingester::error::IngesterError;
 use crate::ingester::parser::indexer_events::BatchEvent;
 use crate::ingester::parser::{
@@ -13,6 +13,7 @@ use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder,
     QueryTrait,
 };
+use crate::ingester::persist::persisted_indexed_merkle_tree::multi_append;
 
 /// We need to find the events of the same tree:
 /// - order them by sequence number and execute them in order
@@ -35,6 +36,9 @@ pub async fn persist_batch_events(
                 }
                 MerkleTreeEvent::BatchAppend(batch_append_event) => {
                     persist_batch_append_event(txn, batch_append_event, &mut leaf_nodes).await
+                }
+                MerkleTreeEvent::BatchAddressAppend(batch_address_append_event) => {
+                    persist_batch_address_append_event(txn, batch_address_append_event).await
                 }
                 _ => Err(IngesterError::InvalidEvent),
             }?;
@@ -172,5 +176,37 @@ async fn persist_batch_nullify_event<'a>(
         )
         .build(txn.get_database_backend());
     txn.execute(query).await?;
+    Ok(())
+}
+
+/// Persists a batch address append event.
+/// 1. Create leaf nodes with the address value as leaf.
+/// 2. Remove inserted elements from the database address queue.
+async fn persist_batch_address_append_event(
+    txn: &DatabaseTransaction,
+    batch_address_append_event: &BatchEvent
+) -> Result<(), IngesterError> {
+    let addresses = address_queue::Entity::find()
+        .filter(
+            address_queue::Column::Seq
+                .lte(batch_address_append_event.sequence_number as i64)
+                .and(address_queue::Column::Tree.eq(batch_address_append_event.merkle_tree_pubkey.to_vec())),
+        )
+        .order_by_asc(address_queue::Column::Seq)
+        .all(txn)
+        .await?;
+
+    let address_values = addresses.iter().map(|address| address.address.clone()).collect::<Vec<_>>();
+    multi_append(txn, address_values, batch_address_append_event.merkle_tree_pubkey.to_vec()).await?;
+
+    address_queue::Entity::delete_many()
+        .filter(
+            address_queue::Column::Seq
+                .lte(batch_address_append_event.sequence_number as i64)
+                .and(address_queue::Column::Tree.eq(batch_address_append_event.merkle_tree_pubkey.to_vec())),
+        )
+        .exec(txn)
+        .await?;
+
     Ok(())
 }
