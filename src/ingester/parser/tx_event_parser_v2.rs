@@ -115,9 +115,8 @@ pub fn create_state_update(
                 .clone();
             state_update_event.addresses.push(AddressQueueUpdate {
                 tree: tree_info.tree.into(),
-                queue: tree_info.queue.into(),
                 address: new_address.address,
-                seq: seq.seq,
+                queue_index: seq.seq,
             });
         }
 

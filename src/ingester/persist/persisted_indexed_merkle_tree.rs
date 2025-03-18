@@ -55,7 +55,7 @@ pub fn get_zeroeth_exclusion_range(tree: Vec<u8>) -> indexed_trees::Model {
         tree,
         leaf_index: 0,
         value: vec![0; 32],
-        next_index: 1,
+        next_index: 0,
         next_value: vec![0]
             .into_iter()
             .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
@@ -64,19 +64,19 @@ pub fn get_zeroeth_exclusion_range(tree: Vec<u8>) -> indexed_trees::Model {
     }
 }
 
-pub fn get_top_element(tree: Vec<u8>) -> indexed_trees::Model {
-    indexed_trees::Model {
-        tree,
-        leaf_index: 1,
-        value: vec![0]
-            .into_iter()
-            .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
-            .collect(),
-        next_index: 0,
-        next_value: vec![0; 32],
-        seq: Some(0),
-    }
-}
+// pub fn get_top_element(tree: Vec<u8>) -> indexed_trees::Model {
+//     indexed_trees::Model {
+//         tree,
+//         leaf_index: 1,
+//         value: vec![0]
+//             .into_iter()
+//             .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
+//             .collect(),
+//         next_index: 0,
+//         next_value: vec![0; 32],
+//         seq: Some(0),
+//     }
+// }
 
 pub async fn get_exclusion_range_with_proof(
     txn: &DatabaseTransaction,
@@ -198,7 +198,8 @@ pub async fn update_indexed_tree_leaves(
     let trees: HashSet<Pubkey> = indexed_leaf_updates.keys().map(|x| x.0).collect();
     for tree in trees {
         {
-            let leaf = get_top_element(tree.to_bytes().to_vec());
+            // let leaf = get_top_element(tree.to_bytes().to_vec());
+            let leaf = get_zeroeth_exclusion_range(tree.to_bytes().to_vec());
             let leaf_update = indexed_leaf_updates.get(&(tree, leaf.leaf_index as u64));
             if leaf_update.is_none() {
                 indexed_leaf_updates.insert(
@@ -304,7 +305,7 @@ pub async fn multi_append(
         ))
         .await
         .map_err(|e| {
-            IngesterError::DatabaseError(format!("Failed to lock state_trees table: {}", e))
+            IngesterError::DatabaseError(format!("Failed to lock indexed_trees table: {}", e))
         })?;
     }
 
@@ -330,7 +331,7 @@ pub async fn multi_append(
     if indexed_tree.is_empty() {
         for model in [
             get_zeroeth_exclusion_range(tree.clone()),
-            get_top_element(tree.clone()),
+            // get_top_element(tree.clone()),
         ] {
             elements_to_update.insert(model.leaf_index, model.clone());
             indexed_tree.insert(model.value.clone(), model);

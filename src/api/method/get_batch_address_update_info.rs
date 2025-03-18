@@ -1,20 +1,24 @@
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait,
-    QueryFilter, QueryOrder, Statement, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, Statement, TransactionTrait,
 };
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::api::error::PhotonApiError;
-use crate::api::method::get_multiple_new_address_proofs::{get_multiple_new_address_proofs_helper, AddressWithTree, MerkleContextWithNewAddressProof};
+use crate::api::method::get_multiple_new_address_proofs::{
+    get_multiple_new_address_proofs_helper, AddressWithTree, MerkleContextWithNewAddressProof,
+};
 use crate::common::typedefs::context::Context;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
-use crate::dao::generated::{indexed_trees};
+use crate::dao::generated::indexed_trees;
 use crate::ingester::parser::tree_info::TreeInfo;
-use crate::ingester::persist::{compute_parent_hash};
-use crate::ingester::persist::persisted_indexed_merkle_tree::{compute_range_node_hash};
+use crate::ingester::persist::compute_parent_hash;
+use crate::ingester::persist::persisted_indexed_merkle_tree::{
+    compute_range_node_hash, get_zeroeth_exclusion_range,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -59,9 +63,9 @@ pub async fn get_batch_address_update_info(
 ) -> Result<GetBatchAddressUpdateInfoResponse, PhotonApiError> {
     let batch_size = request.batch_size;
     let merkle_tree_pubkey = request.tree;
-    let tree_info = TreeInfo::get(&merkle_tree_pubkey.to_base58()).ok_or_else(|| {
-        PhotonApiError::UnexpectedError("Failed to get tree info".to_string())
-    })?.clone();
+    let tree_info = TreeInfo::get(&merkle_tree_pubkey.to_base58())
+        .ok_or_else(|| PhotonApiError::UnexpectedError("Failed to get tree info".to_string()))?
+        .clone();
 
     let merkle_tree = SerializablePubkey::from(merkle_tree_pubkey.0).to_bytes_vec();
 
@@ -79,14 +83,14 @@ pub async fn get_batch_address_update_info(
     let max_index_stmt = Statement::from_string(
         tx.get_database_backend(),
         format!(
-            "SELECT COALESCE(MAX(leaf_index), 0) as max_index FROM indexed_trees WHERE tree = {}",
+            "SELECT COALESCE(MAX(leaf_index), 1) as max_index FROM indexed_trees WHERE tree = {}",
             format_bytes(merkle_tree.clone(), tx.get_database_backend())
         ),
     );
     let max_index_result = tx.query_one(max_index_stmt).await?;
     let batch_start_index = match max_index_result {
         Some(row) => row.try_get::<i64>("", "max_index")? as usize,
-        None => 0,
+        None => 1,
     };
 
     // 2. Get queue elements from the address_queues table
@@ -140,27 +144,39 @@ pub async fn get_batch_address_update_info(
         addresses.push(address_seq);
     }
 
-
     // 4. Get non-inclusion proofs for each address
-    let non_inclusion_proofs = get_multiple_new_address_proofs_helper(&tx, addresses_with_trees).await?;
+    let non_inclusion_proofs =
+        get_multiple_new_address_proofs_helper(&tx, addresses_with_trees).await?;
 
     // 5. Calculate subtrees from the indexed tree
-    let entries = indexed_trees::Entity::find()
+    let mut entries = indexed_trees::Entity::find()
         .filter(indexed_trees::Column::Tree.eq(merkle_tree.clone()))
         .order_by_asc(indexed_trees::Column::LeafIndex)
         .all(&tx)
         .await
         .map_err(|e| PhotonApiError::UnexpectedError(format!("DB error: {}", e)))?;
 
+    if entries.is_empty() {
+        let entry = get_zeroeth_exclusion_range(merkle_tree.clone());
+        entries.push(entry);
+    }
     let mut subtrees = vec![[0u8; 32]; tree_info.height as usize];
 
     // If we have entries, calculate the subtrees
     if !entries.is_empty() {
         // Build initial layer from leaf hashes
-        let mut current_layer: Vec<Vec<u8>> = entries.iter()
-            .map(|e| compute_range_node_hash(e)
-                .map_err(|e| PhotonApiError::UnexpectedError(format!("Failed to compute range node hash: {}", e)))
-                .map(|h| h.to_vec()))
+        let mut current_layer: Vec<Vec<u8>> = entries
+            .iter()
+            .map(|e| {
+                compute_range_node_hash(e)
+                    .map_err(|e| {
+                        PhotonApiError::UnexpectedError(format!(
+                            "Failed to compute range node hash: {}",
+                            e
+                        ))
+                    })
+                    .map(|h| h.to_vec())
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut level = 0;
@@ -178,8 +194,13 @@ pub async fn get_batch_address_update_info(
             let mut next_layer = Vec::new();
             for chunk in current_layer.chunks(2) {
                 if chunk.len() == 2 {
-                    let parent = compute_parent_hash(chunk[0].clone(), chunk[1].clone())
-                        .map_err(|e| PhotonApiError::UnexpectedError(format!("Failed to compute parent hash: {}", e)))?;
+                    let parent =
+                        compute_parent_hash(chunk[0].clone(), chunk[1].clone()).map_err(|e| {
+                            PhotonApiError::UnexpectedError(format!(
+                                "Failed to compute parent hash: {}",
+                                e
+                            ))
+                        })?;
                     next_layer.push(parent);
                 } else {
                     next_layer.push(chunk[0].clone());

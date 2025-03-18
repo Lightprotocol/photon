@@ -8,8 +8,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub address: Vec<u8>,
     pub tree: Vec<u8>,
-    pub queue: Vec<u8>,
-    pub seq: i64,
+    pub queue_index: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

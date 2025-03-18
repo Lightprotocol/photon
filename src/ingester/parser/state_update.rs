@@ -67,9 +67,8 @@ pub struct IndexedTreeLeafUpdate {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AddressQueueUpdate {
     pub tree: SerializablePubkey,
-    pub queue: SerializablePubkey,
     pub address: [u8; 32],
-    pub seq: u64,
+    pub queue_index: u64,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]

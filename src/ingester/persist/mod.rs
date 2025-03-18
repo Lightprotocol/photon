@@ -378,8 +378,7 @@ async fn append_addresses(
         address_models.push(address_queue::ActiveModel {
             address: Set(address.address.to_vec()),
             tree: Set(address.tree.to_bytes_vec()),
-            queue: Set(address.queue.to_bytes_vec()),
-            seq: Set(address.seq as i64),
+            queue_index: Set(address.queue_index as i64),
         });
     }
 

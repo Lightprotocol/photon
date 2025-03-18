@@ -186,23 +186,29 @@ async fn persist_batch_address_append_event(
     txn: &DatabaseTransaction,
     batch_address_append_event: &BatchEvent
 ) -> Result<(), IngesterError> {
+    println!("persist_batch_address_append_event: {:?}", batch_address_append_event);
     let addresses = address_queue::Entity::find()
         .filter(
-            address_queue::Column::Seq
-                .lte(batch_address_append_event.sequence_number as i64)
+            address_queue::Column::QueueIndex
+                .lt(batch_address_append_event.new_next_index as i64)
                 .and(address_queue::Column::Tree.eq(batch_address_append_event.merkle_tree_pubkey.to_vec())),
         )
-        .order_by_asc(address_queue::Column::Seq)
+        .order_by_asc(address_queue::Column::QueueIndex)
         .all(txn)
         .await?;
 
     let address_values = addresses.iter().map(|address| address.address.clone()).collect::<Vec<_>>();
-    multi_append(txn, address_values, batch_address_append_event.merkle_tree_pubkey.to_vec()).await?;
+    println!("addresses to append {:?}", address_values);
+    println!("addresses len {:?}", address_values.len());
+
+    let result = multi_append(txn, address_values, batch_address_append_event.merkle_tree_pubkey.to_vec()).await?;
+
+    println!("result {:?}", result);
 
     address_queue::Entity::delete_many()
         .filter(
-            address_queue::Column::Seq
-                .lte(batch_address_append_event.sequence_number as i64)
+            address_queue::Column::QueueIndex
+                .lt(batch_address_append_event.new_next_index as i64)
                 .and(address_queue::Column::Tree.eq(batch_address_append_event.merkle_tree_pubkey.to_vec())),
         )
         .exec(txn)

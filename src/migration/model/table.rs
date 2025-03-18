@@ -112,7 +112,6 @@ pub enum StateTreeHistories {
 pub enum AddressQueues {
     Table,
     Tree,
-    Queue,
     Address,
-    Seq,
+    QueueIndex,
 }
