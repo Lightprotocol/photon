@@ -29,9 +29,9 @@ pub struct GetBatchAddressUpdateInfoRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct AddressSeq {
+pub struct AddressQueueIndex {
     pub address: SerializablePubkey,
-    pub seq: u64,
+    pub queue_index: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -39,7 +39,7 @@ pub struct AddressSeq {
 pub struct GetBatchAddressUpdateInfoResponse {
     pub context: Context,
     pub start_index: u64,
-    pub addresses: Vec<AddressSeq>,
+    pub addresses: Vec<AddressQueueIndex>,
     pub non_inclusion_proofs: Vec<MerkleContextWithNewAddressProof>,
     pub subtrees: Vec<[u8; 32]>,
 }
@@ -97,9 +97,9 @@ pub async fn get_batch_address_update_info(
     let address_queue_stmt = Statement::from_string(
         tx.get_database_backend(),
         format!(
-            "SELECT tree, queue, address, seq FROM address_queues
+            "SELECT tree, address, queue_index FROM address_queues
              WHERE tree = {}
-             ORDER BY seq ASC
+             ORDER BY queue_index ASC
              LIMIT {}",
             format_bytes(merkle_tree.clone(), tx.get_database_backend()),
             batch_size
@@ -128,7 +128,7 @@ pub async fn get_batch_address_update_info(
 
     for row in &queue_results {
         let address: Vec<u8> = row.try_get("", "address")?;
-        let seq: i64 = row.try_get("", "seq")?;
+        let queue_index: i64 = row.try_get("", "queue_index")?;
 
         let address_pubkey = SerializablePubkey::try_from(address.clone())?;
         addresses_with_trees.push(AddressWithTree {
@@ -136,9 +136,9 @@ pub async fn get_batch_address_update_info(
             tree: serializable_tree,
         });
 
-        let address_seq = AddressSeq {
+        let address_seq = AddressQueueIndex {
             address: address_pubkey,
-            seq: seq as u64,
+            queue_index: queue_index as u64,
         };
 
         addresses.push(address_seq);
