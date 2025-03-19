@@ -190,7 +190,7 @@ async fn persist_batch_address_append_event(
     let addresses = address_queue::Entity::find()
         .filter(
             address_queue::Column::QueueIndex
-                .lt(batch_address_append_event.new_next_index as i64)
+                .lt(batch_address_append_event.new_next_index as i64 - 1)
                 .and(address_queue::Column::Tree.eq(batch_address_append_event.merkle_tree_pubkey.to_vec())),
         )
         .order_by_asc(address_queue::Column::QueueIndex)
@@ -208,7 +208,7 @@ async fn persist_batch_address_append_event(
     address_queue::Entity::delete_many()
         .filter(
             address_queue::Column::QueueIndex
-                .lt(batch_address_append_event.new_next_index as i64)
+                .lt(batch_address_append_event.new_next_index as i64 - 1)
                 .and(address_queue::Column::Tree.eq(batch_address_append_event.merkle_tree_pubkey.to_vec())),
         )
         .exec(txn)
