@@ -50,7 +50,6 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
             is_compression_transaction = true;
             state_updates.push(state_update);
         } else {
-            println!("parsed parse_public_transaction_event_v2: None");
             for (index, _) in ordered_instructions.iter().enumerate() {
                 if ordered_instructions.len() - index > 2 {
                     if let Some(state_update) = parse_legacy_public_transaction_event(
