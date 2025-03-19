@@ -1091,7 +1091,7 @@ async fn test_get_multiple_new_address_proofs_interop(
     use photon_indexer::api::method::{
         get_multiple_new_address_proofs::{
             get_multiple_new_address_proofs, get_multiple_new_address_proofs_v2, AddressList,
-            AddressListWithTrees, AddressWithTree, ADDRESS_TREE_ADDRESS,
+            AddressListWithTrees, AddressWithTree, LEGACY_ADDRESS_TREE,
         },
         get_validity_proof::CompressedProof,
     };
@@ -1144,7 +1144,7 @@ async fn test_get_multiple_new_address_proofs_interop(
         .into_iter()
         .map(|address| AddressWithTree {
             address,
-            tree: SerializablePubkey::from(ADDRESS_TREE_ADDRESS),
+            tree: SerializablePubkey::from(LEGACY_ADDRESS_TREE),
         })
         .collect();
     let proof_v2 = get_multiple_new_address_proofs_v2(
