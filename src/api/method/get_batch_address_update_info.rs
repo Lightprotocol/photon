@@ -2,7 +2,6 @@ use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, Statement, TransactionTrait,
 };
-
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -17,7 +16,7 @@ use crate::dao::generated::indexed_trees;
 use crate::dao::generated::indexed_trees::Model;
 use crate::ingester::parser::tree_info::TreeInfo;
 use crate::ingester::persist::compute_parent_hash;
-use crate::ingester::persist::persisted_indexed_merkle_tree::{compute_range_node_hash_for_subtrees, get_zeroeth_exclusion_range};
+use crate::ingester::persist::persisted_indexed_merkle_tree::{compute_range_node_hash_for_subtrees, format_bytes, get_zeroeth_exclusion_range};
 use crate::ingester::persist::persisted_state_tree::ZERO_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
@@ -79,7 +78,7 @@ pub async fn get_batch_address_update_info(
             .await?;
     }
 
-    // 1. Get batch_start_index (current tree size)
+    // 1. Get batch_start_index
     let max_index_stmt = Statement::from_string(
         tx.get_database_backend(),
         format!(
@@ -105,10 +104,9 @@ pub async fn get_batch_address_update_info(
             batch_size
         ),
     );
-
     let queue_results = tx.query_all(address_queue_stmt).await?;
 
-    // Exit early if no elements in the queue
+    // Early exit if no elements in the queue
     if queue_results.is_empty() {
         tx.commit().await?;
         return Ok(GetBatchAddressUpdateInfoResponse {
@@ -120,47 +118,40 @@ pub async fn get_batch_address_update_info(
         });
     }
 
-    // 3. Create array of addresses with seq numbers
+    // 3. Build arrays for addresses and addresses with trees.
     let mut addresses = Vec::new();
     let mut addresses_with_trees = Vec::new();
-
     let serializable_tree = SerializablePubkey::try_from(merkle_tree.clone())?;
 
     for row in &queue_results {
         let address: Vec<u8> = row.try_get("", "address")?;
         let queue_index: i64 = row.try_get("", "queue_index")?;
-
         let address_pubkey = SerializablePubkey::try_from(address.clone())?;
         addresses_with_trees.push(AddressWithTree {
             address: address_pubkey,
             tree: serializable_tree,
         });
-
-        let address_seq = AddressQueueIndex {
+        addresses.push(AddressQueueIndex {
             address: address_pubkey,
             queue_index: queue_index as u64,
-        };
-
-        addresses.push(address_seq);
+        });
     }
 
-    // 4. Get non-inclusion proofs for each address
+    // 4. Get non-inclusion proofs for each address.
     let non_inclusion_proofs =
         get_multiple_new_address_proofs_helper(&tx, addresses_with_trees).await?;
 
-    // 5. Calculate subtrees from the indexed tree
+    // 5. Retrieve indexed tree entries and compute subtrees.
     let mut entries = indexed_trees::Entity::find()
         .filter(indexed_trees::Column::Tree.eq(merkle_tree.clone()))
         .order_by_asc(indexed_trees::Column::LeafIndex)
         .all(&tx)
         .await
         .map_err(|e| PhotonApiError::UnexpectedError(format!("DB error: {}", e)))?;
-
     if entries.is_empty() {
         let entry = get_zeroeth_exclusion_range(merkle_tree.clone());
         entries.push(entry);
     }
-
     let subtrees = get_subtrees(tree_info.height as usize, &entries)?;
 
     Ok(GetBatchAddressUpdateInfoResponse {
@@ -177,30 +168,31 @@ fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, 
     if entries.is_empty() {
         return Ok(subtrees);
     }
-    // Compute each leaf hash (verify it is 32 bytes) and sort by leaf_index.
+
+    // Compute leaf hashes and sort by leaf_index.
     let mut sorted_leaves: Vec<(i64, [u8; 32])> = entries
         .iter()
         .map(|entry| {
-            let hash = compute_range_node_hash_for_subtrees(entry)
-                .map_err(|e| {
-                    PhotonApiError::UnexpectedError(format!("Failed to compute range node hash: {}", e))
-                })?;
+            let hash = compute_range_node_hash_for_subtrees(entry).map_err(|e| {
+                PhotonApiError::UnexpectedError(format!("Failed to compute range node hash: {}", e))
+            })?;
             if hash.0.len() != 32 {
-                return Err(PhotonApiError::UnexpectedError("Computed hash is not 32 bytes".to_string()));
+                return Err(PhotonApiError::UnexpectedError(
+                    "Computed hash is not 32 bytes".to_string(),
+                ));
             }
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&hash.0);
             Ok((entry.leaf_index, arr))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<_, _>>()?;
     sorted_leaves.sort_by_key(|(idx, _)| *idx);
     let leaf_level: Vec<[u8; 32]> = sorted_leaves.into_iter().map(|(_, hash)| hash).collect();
 
-    // Build layers from the leaves.
+    // Build layers upward from the leaves.
     let mut layers: Vec<Vec<[u8; 32]>> = Vec::new();
     layers.push(leaf_level);
 
-    // Build successive layers until we reach the desired tree height.
     while layers.len() < tree_height {
         let last_layer = layers.last().unwrap();
         if last_layer.is_empty() {
@@ -216,27 +208,24 @@ fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, 
                         PhotonApiError::UnexpectedError(format!("Failed to compute parent hash: {}", e))
                     })?;
                 if parent.len() < 32 {
-                    return Err(PhotonApiError::UnexpectedError("Parent hash length is less than 32".to_string()));
+                    return Err(PhotonApiError::UnexpectedError(
+                        "Parent hash length is less than 32".to_string(),
+                    ));
                 }
                 let mut parent_arr = [0u8; 32];
                 parent_arr.copy_from_slice(&parent[..32]);
                 next_layer.push(parent_arr);
             } else {
-                // // For an unpaired node, simply propagate it.
-                // next_layer.push(last_layer[i]);
-
-                println!("Unpaired node: {:?}", last_layer[i]);
-                println!("Last layer: {:?}", last_layer);
-                println!("layers.len() = {}", layers.len());
-                // Instead of simply propagating the unpaired node,
-                // compute its parent using a default zero value for the missing right child.
-                let default_right =  ZERO_BYTES[layers.len() - 1]; //  vec![0u8; 32];  // You might want to use a level-specific zero if available.
+                // For an unpaired node, use a default zero value (level-specific).
+                let default_right = ZERO_BYTES[layers.len() - 1];
                 let parent = compute_parent_hash(last_layer[i].to_vec(), default_right.to_vec())
                     .map_err(|e| {
                         PhotonApiError::UnexpectedError(format!("Failed to compute parent hash: {}", e))
                     })?;
                 if parent.len() < 32 {
-                    return Err(PhotonApiError::UnexpectedError("Parent hash length is less than 32".to_string()));
+                    return Err(PhotonApiError::UnexpectedError(
+                        "Parent hash length is less than 32".to_string(),
+                    ));
                 }
                 let mut parent_arr = [0u8; 32];
                 parent_arr.copy_from_slice(&parent[..32]);
@@ -247,9 +236,7 @@ fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, 
         layers.push(next_layer);
     }
 
-    // For each level, choose the “rightmost left” node:
-    // - if even number of nodes: select element at index len-2,
-    // - if odd: select the last element.
+    // For each level choose the “rightmost left” node.
     for level in 0..tree_height {
         if let Some(layer) = layers.get(level) {
             if !layer.is_empty() {
@@ -266,49 +253,29 @@ fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, 
     Ok(subtrees)
 }
 
-
-
-fn format_bytes(bytes: Vec<u8>, database_backend: DatabaseBackend) -> String {
-    let hex_bytes = hex::encode(bytes);
-    match database_backend {
-        DatabaseBackend::Postgres => format!("E'\\\\x{}'", hex_bytes),
-        DatabaseBackend::Sqlite => format!("x'{}'", hex_bytes),
-        _ => unimplemented!(),
-    }
-}
-
-
 #[cfg(test)]
 mod tests {
-    use light_batched_merkle_tree::constants::DEFAULT_BATCH_ADDRESS_TREE_HEIGHT;
+    use super::*;
+    use crate::ingester::persist::persisted_indexed_merkle_tree::{get_top_element, HIGHEST_ADDRESS_PLUS_ONE};
     use light_hasher::Poseidon;
     use light_indexed_merkle_tree::array::IndexedArray;
     use light_indexed_merkle_tree::reference::IndexedMerkleTree;
-    use num_bigint::{BigUint, ToBigUint};
-    use crate::ingester::persist::persisted_indexed_merkle_tree::{get_top_element, HIGHEST_ADDRESS_PLUS_ONE};
-    use super::*;
+    use num_bigint::ToBigUint;
 
+    // assert subtrees equality with reference implementation after appending from 1 up to 1000 addresses.
     #[test]
-    fn test_subtrees_2_elements() {
+    fn test_subtrees_dynamic() {
         let tree_height = 40;
         let mut relayer_indexing_array = IndexedArray::<Poseidon, usize>::default();
         relayer_indexing_array.init().unwrap();
-        let mut relayer_merkle_tree = IndexedMerkleTree::<Poseidon, usize>::new(tree_height, 0).unwrap();
-
+        let mut relayer_merkle_tree =
+            IndexedMerkleTree::<Poseidon, usize>::new(tree_height, 0).unwrap();
         relayer_merkle_tree.init().unwrap();
-        let root = relayer_merkle_tree.root();
-        let root_bn = BigUint::from_bytes_be(&root);
-        println!("root {:?}", root_bn);
-        println!("indexed mt inited root {:?}", relayer_merkle_tree.root());
+        let tree_bytes = vec![1, 2, 3, 4, 5];
 
-        let reference_subtrees: Vec<[u8; 32]> = relayer_merkle_tree.merkle_tree.get_subtrees();
-        println!("reference subtrees for empty tree {:?}", reference_subtrees);
-
-        let mut db_entries = vec![];
-
-        let tree_bytes = vec![1, 2, 3, 4, 5]; // Mock tree ID bytes
-        // Add the zeroeth element
-        let zeroeth_element = indexed_trees::Model {
+        // Prepare db_entries with the zeroeth element and the top element.
+        let mut db_entries = Vec::new();
+        db_entries.push(indexed_trees::Model {
             tree: tree_bytes.clone(),
             leaf_index: 0,
             value: vec![0; 32],
@@ -318,266 +285,76 @@ mod tests {
                 .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
                 .collect(),
             seq: Some(0),
-        };
-        db_entries.push(zeroeth_element);
+        });
+        db_entries.push(get_top_element(tree_bytes.clone()));
 
-        let top_element = db_entries.push(get_top_element(tree_bytes.clone()));
+        // For each appended address from 1 to 1000.
+        for count in 1..=1000 {
+            let address_value = count.to_biguint().unwrap();
+            let address_bytes = address_value.to_bytes_be();
+            let mut padded_address = vec![0; 32];
+            if address_bytes.len() <= 32 {
+                let start_idx = 32 - address_bytes.len();
+                padded_address[start_idx..].copy_from_slice(&address_bytes);
+            } else {
+                padded_address.copy_from_slice(&address_bytes[0..32]);
+            }
 
+            let new_index = db_entries.len() as i64;
+            // Create a new model with a placeholder next pointer.
+            let new_entry = indexed_trees::Model {
+                tree: tree_bytes.clone(),
+                leaf_index: new_index,
+                value: padded_address.clone(),
+                next_index: 0,
+                next_value: vec![0; 32],
+                seq: Some(1),
+            };
+
+            // Update chain pointers:
+            if new_index == 2 {
+                // First appended element: update the zeroeth element pointer.
+                db_entries[0].next_index = new_index;
+                db_entries[0].next_value = padded_address.clone();
+            } else {
+                // Update the previously appended element.
+                if let Some(prev) = db_entries.get_mut((new_index - 1) as usize) {
+                    prev.next_index = new_index;
+                    prev.next_value = padded_address.clone();
+                }
+            }
+            db_entries.push(new_entry);
+
+            // Append to the reference Merkle tree.
+            relayer_merkle_tree
+                .append(&address_value, &mut relayer_indexing_array)
+                .unwrap();
+        }
+        // After all appends, update the last appended element to point back to the top element.
+        let top_value = db_entries[1].value.clone();
+        if let Some(last) = db_entries.last_mut() {
+            last.next_index = 1;
+            last.next_value = top_value;
+        }
+
+        let reference_subtrees = relayer_merkle_tree.merkle_tree.get_subtrees();
         let our_subtrees = get_subtrees(tree_height, &db_entries).unwrap();
-        println!("db subtrees for empty tree {:?}", reference_subtrees);
 
-        assert_eq!(reference_subtrees.len(), our_subtrees.len(),
-                   "Subtrees arrays should have the same length");
-
-        for i in 0..relayer_merkle_tree.merkle_tree.rightmost_index {
-            let element = &relayer_indexing_array.elements[i];
-            let leaf = relayer_merkle_tree.merkle_tree.get_leaf(i).unwrap();
-            println!("ref element {:?} hash: {:?}", element, leaf);
-        }
-
-        // print all leaves from our tree
-        for (i, entry) in db_entries.iter().enumerate() {
-            println!("our entry {} {:?} hash: {:?}", i, entry, compute_range_node_hash_for_subtrees(entry).unwrap().0);
-        }
-
-
-        let address1_value = 30_u32.to_biguint().unwrap();
-        let address1_bytes = address1_value.to_bytes_be();
-
-        let address2_value = 31_u32.to_biguint().unwrap();
-        let address2_bytes = address2_value.to_bytes_be();
-
-        let test_address: BigUint = BigUint::from_bytes_be(&[
-            171, 159, 63, 33, 62, 94, 156, 27, 61, 216, 203, 164, 91, 229, 110, 16, 230, 124, 129, 133,
-            222, 159, 99, 235, 50, 181, 94, 203, 105, 23, 82,
-        ]);
-
-        let non_inclusion_proof_0 = relayer_merkle_tree
-            .get_non_inclusion_proof(&test_address, &relayer_indexing_array)
-            .unwrap();
-
-        // println!("non inclusion proof init {:?}", non_inclusion_proof_0);
-
-        relayer_merkle_tree
-            .append(&address1_value, &mut relayer_indexing_array)
-            .unwrap();
-
-        relayer_merkle_tree
-            .append(&address2_value, &mut relayer_indexing_array)
-            .unwrap();
-
-        println!(
-            "indexed mt with 2 appends {:?}",
-            relayer_merkle_tree.root()
+        assert_eq!(
+            reference_subtrees.len(),
+            our_subtrees.len(),
+            "Subtrees arrays should have the same length"
         );
-        let root_bn = BigUint::from_bytes_be(&relayer_merkle_tree.root());
-        println!("indexed mt with 2 appends {:?}", root_bn);
-
-        let reference_subtrees_with_one = relayer_merkle_tree.merkle_tree.get_subtrees();
-        println!("reference subtrees 1 element {:?}", reference_subtrees_with_one);
-
-        let mut padded_address_1 = vec![0; 32];
-        if address1_bytes.len() <= 32 {
-            let start_idx = 32 - address1_bytes.len();
-            padded_address_1[start_idx..].copy_from_slice(&address1_bytes);
-        } else {
-            padded_address_1.copy_from_slice(&address1_bytes[0..32]);
-        }
-
-        let mut padded_address_2 = vec![0; 32];
-        if address2_bytes.len() <= 32 {
-            let start_idx = 32 - address2_bytes.len();
-            padded_address_2[start_idx..].copy_from_slice(&address2_bytes);
-        } else {
-            padded_address_2.copy_from_slice(&address2_bytes[0..32]);
-        }
-
-        let entry_1_value = db_entries.iter()
-            .find(|e| e.leaf_index == 1)
-            .map(|e| e.value.clone())
-            .unwrap_or_else(|| vec![0; 32]);
-
-        let address1_model = indexed_trees::Model {
-            tree: tree_bytes.clone(),
-            leaf_index: 2,
-            value: padded_address_1,
-            next_index: 3,
-            next_value: padded_address_2.clone(),
-            seq: Some(1),
-        };
-
-        let address2_model = indexed_trees::Model {
-            tree: tree_bytes.clone(),
-            leaf_index: 3,
-            value: padded_address_2,
-            next_index: 1,
-            next_value: entry_1_value,
-            seq: Some(1),
-        };
-
-        db_entries[0].next_index = 2;
-        db_entries[0].next_value = address1_model.value.clone();
-
-        // Add new address to entries
-        db_entries.push(address1_model);
-        db_entries.push(address2_model);
-
-        // Calculate subtrees again with our implementation
-        let our_subtrees_with_one = get_subtrees(tree_height, &db_entries).unwrap();
-        println!("our subtrees 1 element {:?}", our_subtrees_with_one);
-
-        for i in 0..relayer_merkle_tree.merkle_tree.rightmost_index {
-            let element = &relayer_indexing_array.elements[i];
-            let leaf = relayer_merkle_tree.merkle_tree.get_leaf(i).unwrap();
-            println!("ref element {:?} hash: {:?}", element, leaf);
-        }
-
-        // print all leaves from our tree
-        for (i, entry) in db_entries.iter().enumerate() {
-            println!("our entry {} {:?} hash: {:?}", i, entry, compute_range_node_hash_for_subtrees(entry).unwrap().0);
-        }
-
-
-
-        // Compare the two implementations with one address
-        for (i, (ref_subtree, our_subtree)) in reference_subtrees_with_one.iter().zip(our_subtrees_with_one.iter()).enumerate() {
-            assert_eq!(ref_subtree, our_subtree,
-                       "Subtrees at level {} don't match after adding one address", i);
+        for (i, (ref_subtree, our_subtree)) in reference_subtrees
+            .iter()
+            .zip(our_subtrees.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                ref_subtree, our_subtree,
+                "Subtrees at level {} don't match after adding {} addresses",
+                i, 1000
+            );
         }
     }
-
-    #[test]
-    fn test_subtrees_1_element() {
-        let tree_height = 40;
-        let mut relayer_indexing_array = IndexedArray::<Poseidon, usize>::default();
-        relayer_indexing_array.init().unwrap();
-        let mut relayer_merkle_tree = IndexedMerkleTree::<Poseidon, usize>::new(tree_height, 0).unwrap();
-
-        relayer_merkle_tree.init().unwrap();
-        let root = relayer_merkle_tree.root();
-        let root_bn = BigUint::from_bytes_be(&root);
-        println!("root {:?}", root_bn);
-        println!("indexed mt inited root {:?}", relayer_merkle_tree.root());
-
-        let reference_subtrees: Vec<[u8; 32]> = relayer_merkle_tree.merkle_tree.get_subtrees();
-        println!("reference subtrees for empty tree {:?}", reference_subtrees);
-
-        let mut db_entries = vec![];
-
-        let tree_bytes = vec![1, 2, 3, 4, 5]; // Mock tree ID bytes
-        // Add the zeroeth element
-        let zeroeth_element = indexed_trees::Model {
-            tree: tree_bytes.clone(),
-            leaf_index: 0,
-            value: vec![0; 32],
-            next_index: 1,
-            next_value: vec![0]
-                .into_iter()
-                .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
-                .collect(),
-            seq: Some(0),
-        };
-        db_entries.push(zeroeth_element);
-
-        let top_element = db_entries.push(get_top_element(tree_bytes.clone()));
-
-        let our_subtrees = get_subtrees(tree_height, &db_entries).unwrap();
-        println!("db subtrees for empty tree {:?}", reference_subtrees);
-
-        assert_eq!(reference_subtrees.len(), our_subtrees.len(),
-                   "Subtrees arrays should have the same length");
-
-        for i in 0..relayer_merkle_tree.merkle_tree.rightmost_index {
-            let element = &relayer_indexing_array.elements[i];
-            let leaf = relayer_merkle_tree.merkle_tree.get_leaf(i).unwrap();
-            println!("ref element {:?} hash: {:?}", element, leaf);
-        }
-
-        // print all leaves from our tree
-        for (i, entry) in db_entries.iter().enumerate() {
-            println!("our entry {} {:?} hash: {:?}", i, entry, compute_range_node_hash_for_subtrees(entry).unwrap().0);
-        }
-
-
-        let address1_value = 30_u32.to_biguint().unwrap();
-        let address1_bytes = address1_value.to_bytes_be();
-
-        let test_address: BigUint = BigUint::from_bytes_be(&[
-            171, 159, 63, 33, 62, 94, 156, 27, 61, 216, 203, 164, 91, 229, 110, 16, 230, 124, 129, 133,
-            222, 159, 99, 235, 50, 181, 94, 203, 105, 23, 82,
-        ]);
-
-        let non_inclusion_proof_0 = relayer_merkle_tree
-            .get_non_inclusion_proof(&test_address, &relayer_indexing_array)
-            .unwrap();
-
-        // println!("non inclusion proof init {:?}", non_inclusion_proof_0);
-
-        relayer_merkle_tree
-            .append(&address1_value, &mut relayer_indexing_array)
-            .unwrap();
-
-        println!(
-            "indexed mt with 2 appends {:?}",
-            relayer_merkle_tree.root()
-        );
-        let root_bn = BigUint::from_bytes_be(&relayer_merkle_tree.root());
-        println!("indexed mt with 2 appends {:?}", root_bn);
-
-        let reference_subtrees_with_one = relayer_merkle_tree.merkle_tree.get_subtrees();
-        println!("reference subtrees 1 element {:?}", reference_subtrees_with_one);
-
-        let mut padded_address_1 = vec![0; 32];
-        if address1_bytes.len() <= 32 {
-            let start_idx = 32 - address1_bytes.len();
-            padded_address_1[start_idx..].copy_from_slice(&address1_bytes);
-        } else {
-            padded_address_1.copy_from_slice(&address1_bytes[0..32]);
-        }
-
-
-        let entry_1_value = db_entries.iter()
-            .find(|e| e.leaf_index == 1)
-            .map(|e| e.value.clone())
-            .unwrap_or_else(|| vec![0; 32]);
-
-        let address1_model = indexed_trees::Model {
-            tree: tree_bytes.clone(),
-            leaf_index: 2,
-            value: padded_address_1,
-            next_index: 1,
-            next_value: entry_1_value.clone(),
-            seq: Some(1),
-        };
-
-        db_entries[0].next_index = 2;
-        db_entries[0].next_value = address1_model.value.clone();
-
-        // Add new address to entries
-        db_entries.push(address1_model);
-
-        // Calculate subtrees again with our implementation
-        let our_subtrees_with_one = get_subtrees(tree_height, &db_entries).unwrap();
-        println!("our subtrees 1 element {:?}", our_subtrees_with_one);
-
-        for i in 0..relayer_merkle_tree.merkle_tree.rightmost_index {
-            let element = &relayer_indexing_array.elements[i];
-            let leaf = relayer_merkle_tree.merkle_tree.get_leaf(i).unwrap();
-            println!("ref element {:?} hash: {:?}", element, leaf);
-        }
-
-        // print all leaves from our tree
-        for (i, entry) in db_entries.iter().enumerate() {
-            println!("our entry {} {:?} hash: {:?}", i, entry, compute_range_node_hash_for_subtrees(entry).unwrap().0);
-        }
-
-
-
-        // Compare the two implementations with one address
-        for (i, (ref_subtree, our_subtree)) in reference_subtrees_with_one.iter().zip(our_subtrees_with_one.iter()).enumerate() {
-            assert_eq!(ref_subtree, our_subtree,
-                       "Subtrees at level {} don't match after adding one address", i);
-        }
-    }
-
 }

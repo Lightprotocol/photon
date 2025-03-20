@@ -500,7 +500,7 @@ where
     Ok(indexed_tree)
 }
 
-fn format_bytes(bytes: Vec<u8>, database_backend: DatabaseBackend) -> String {
+pub fn format_bytes(bytes: Vec<u8>, database_backend: DatabaseBackend) -> String {
     let hex_bytes = hex::encode(bytes);
     match database_backend {
         DatabaseBackend::Postgres => format!("E'\\\\x{}'", hex_bytes),
