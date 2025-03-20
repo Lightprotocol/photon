@@ -16,7 +16,9 @@ use crate::dao::generated::indexed_trees;
 use crate::dao::generated::indexed_trees::Model;
 use crate::ingester::parser::tree_info::TreeInfo;
 use crate::ingester::persist::compute_parent_hash;
-use crate::ingester::persist::persisted_indexed_merkle_tree::{compute_range_node_hash_for_subtrees, format_bytes, get_zeroeth_exclusion_range};
+use crate::ingester::persist::persisted_indexed_merkle_tree::{
+    compute_range_node_hash_for_subtrees, format_bytes, get_zeroeth_exclusion_range,
+};
 use crate::ingester::persist::persisted_state_tree::ZERO_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
@@ -75,7 +77,7 @@ pub async fn get_batch_address_update_info(
             tx.get_database_backend(),
             "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;".to_string(),
         ))
-            .await?;
+        .await?;
     }
 
     // 1. Get batch_start_index
@@ -203,10 +205,14 @@ fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, 
         let mut i = 0;
         while i < len {
             if i + 1 < len {
-                let parent = compute_parent_hash(last_layer[i].to_vec(), last_layer[i + 1].to_vec())
-                    .map_err(|e| {
-                        PhotonApiError::UnexpectedError(format!("Failed to compute parent hash: {}", e))
-                    })?;
+                let parent =
+                    compute_parent_hash(last_layer[i].to_vec(), last_layer[i + 1].to_vec())
+                        .map_err(|e| {
+                            PhotonApiError::UnexpectedError(format!(
+                                "Failed to compute parent hash: {}",
+                                e
+                            ))
+                        })?;
                 if parent.len() < 32 {
                     return Err(PhotonApiError::UnexpectedError(
                         "Parent hash length is less than 32".to_string(),
@@ -220,7 +226,10 @@ fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, 
                 let default_right = ZERO_BYTES[layers.len() - 1];
                 let parent = compute_parent_hash(last_layer[i].to_vec(), default_right.to_vec())
                     .map_err(|e| {
-                        PhotonApiError::UnexpectedError(format!("Failed to compute parent hash: {}", e))
+                        PhotonApiError::UnexpectedError(format!(
+                            "Failed to compute parent hash: {}",
+                            e
+                        ))
                     })?;
                 if parent.len() < 32 {
                     return Err(PhotonApiError::UnexpectedError(
@@ -236,17 +245,15 @@ fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, 
         layers.push(next_layer);
     }
 
-    // For each level choose the “rightmost left” node.
-    for level in 0..tree_height {
-        if let Some(layer) = layers.get(level) {
-            if !layer.is_empty() {
-                let selected = if layer.len() % 2 == 0 {
-                    layer[layer.len() - 2]
-                } else {
-                    layer[layer.len() - 1]
-                };
-                subtrees[level] = selected;
-            }
+    // For each level choose the rightmost left node.
+    for (level, layer) in layers.iter().enumerate() {
+        if !layer.is_empty() {
+            let selected = if layer.len() % 2 == 0 {
+                layer[layer.len() - 2]
+            } else {
+                layer[layer.len() - 1]
+            };
+            subtrees[level] = selected;
         }
     }
 
@@ -256,7 +263,9 @@ fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ingester::persist::persisted_indexed_merkle_tree::{get_top_element, HIGHEST_ADDRESS_PLUS_ONE};
+    use crate::ingester::persist::persisted_indexed_merkle_tree::{
+        get_top_element, HIGHEST_ADDRESS_PLUS_ONE,
+    };
     use light_hasher::Poseidon;
     use light_indexed_merkle_tree::array::IndexedArray;
     use light_indexed_merkle_tree::reference::IndexedMerkleTree;
