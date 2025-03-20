@@ -40,7 +40,6 @@ lazy_static! {
 
 pub fn compute_range_node_hash(node: &indexed_trees::Model) -> Result<Hash, IngesterError> {
     let mut poseidon = Poseidon::<Fr>::new_circom(2).unwrap();
-    // let next_index = node.next_index.to_be_bytes();
     Hash::try_from(
         poseidon
             .hash_bytes_be(&[&node.value, &node.next_value])
@@ -48,6 +47,18 @@ pub fn compute_range_node_hash(node: &indexed_trees::Model) -> Result<Hash, Inge
             .map(|x| x.to_vec())?,
     )
     .map_err(|e| IngesterError::ParserError(format!("Failed to convert hash: {}", e)))
+}
+
+pub fn compute_range_node_hash_for_subtrees(node: &indexed_trees::Model) -> Result<Hash, IngesterError> {
+    let mut poseidon = Poseidon::<Fr>::new_circom(3).unwrap();
+    let next_index = node.next_index.to_be_bytes();
+    Hash::try_from(
+        poseidon
+            .hash_bytes_be(&[&node.value, &next_index, &node.next_value])
+            .map_err(|e| IngesterError::ParserError(format!("Failed  to compute hash: {}", e)))
+            .map(|x| x.to_vec())?,
+    )
+        .map_err(|e| IngesterError::ParserError(format!("Failed to convert hash: {}", e)))
 }
 
 pub fn get_zeroeth_exclusion_range(tree: Vec<u8>) -> indexed_trees::Model {
@@ -64,19 +75,19 @@ pub fn get_zeroeth_exclusion_range(tree: Vec<u8>) -> indexed_trees::Model {
     }
 }
 
-// pub fn get_top_element(tree: Vec<u8>) -> indexed_trees::Model {
-//     indexed_trees::Model {
-//         tree,
-//         leaf_index: 1,
-//         value: vec![0]
-//             .into_iter()
-//             .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
-//             .collect(),
-//         next_index: 0,
-//         next_value: vec![0; 32],
-//         seq: Some(0),
-//     }
-// }
+pub fn get_top_element(tree: Vec<u8>) -> indexed_trees::Model {
+    indexed_trees::Model {
+        tree,
+        leaf_index: 1,
+        value: vec![0]
+            .into_iter()
+            .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
+            .collect(),
+        next_index: 0,
+        next_value: vec![0; 32],
+        seq: Some(0),
+    }
+}
 
 pub async fn get_exclusion_range_with_proof(
     txn: &DatabaseTransaction,
