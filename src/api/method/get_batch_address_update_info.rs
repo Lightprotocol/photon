@@ -84,7 +84,7 @@ pub async fn get_batch_address_update_info(
     let max_index_stmt = Statement::from_string(
         tx.get_database_backend(),
         format!(
-            "SELECT COALESCE(MAX(leaf_index), 1) as max_index FROM indexed_trees WHERE tree = {}",
+            "SELECT COALESCE(MAX(leaf_index + 1), 1) as max_index FROM indexed_trees WHERE tree = {}",
             format_bytes(merkle_tree.clone(), tx.get_database_backend())
         ),
     );
