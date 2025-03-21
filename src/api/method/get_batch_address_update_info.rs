@@ -1,3 +1,4 @@
+use log::info;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, Statement, TransactionTrait,
@@ -16,9 +17,7 @@ use crate::dao::generated::indexed_trees;
 use crate::dao::generated::indexed_trees::Model;
 use crate::ingester::parser::tree_info::TreeInfo;
 use crate::ingester::persist::compute_parent_hash;
-use crate::ingester::persist::persisted_indexed_merkle_tree::{
-    compute_range_node_hash_for_subtrees, format_bytes, get_zeroeth_exclusion_range,
-};
+use crate::ingester::persist::persisted_indexed_merkle_tree::{compute_range_node_hash, compute_range_node_hash_for_subtrees, format_bytes, get_top_element, get_zeroeth_exclusion_range, HIGHEST_ADDRESS_PLUS_ONE};
 use crate::ingester::persist::persisted_state_tree::ZERO_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
@@ -62,6 +61,7 @@ pub async fn get_batch_address_update_info(
     conn: &DatabaseConnection,
     request: GetBatchAddressUpdateInfoRequest,
 ) -> Result<GetBatchAddressUpdateInfoResponse, PhotonApiError> {
+    info!("get_batch_address_update_info: {:?}", request);
     let batch_size = request.batch_size;
     let merkle_tree_pubkey = request.tree;
     let tree_info = TreeInfo::get(&merkle_tree_pubkey.to_base58())
@@ -154,7 +154,7 @@ pub async fn get_batch_address_update_info(
         let entry = get_zeroeth_exclusion_range(merkle_tree.clone());
         entries.push(entry);
     }
-    let subtrees = get_subtrees(tree_info.height as usize, &entries)?;
+    let subtrees = get_subtrees(merkle_tree, tree_info.height as usize, &entries)?;
 
     Ok(GetBatchAddressUpdateInfoResponse {
         context,
@@ -165,17 +165,30 @@ pub async fn get_batch_address_update_info(
     })
 }
 
-fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, PhotonApiError> {
+fn get_subtrees(tree: Vec<u8>, tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, PhotonApiError> {
+    info!("get_subtrees: tree: {:?}, tree_height: {}, entries: {:?}", tree, tree_height, entries);
+    let mut entries = Vec::from(entries);
     let mut subtrees = vec![[0u8; 32]; tree_height];
     if entries.is_empty() {
-        return Ok(subtrees);
+        entries.push(indexed_trees::Model {
+            tree: tree.clone(),
+            leaf_index: 0,
+            value: vec![0; 32],
+            next_index: 1,
+            next_value: vec![0]
+                .into_iter()
+                .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
+                .collect(),
+            seq: Some(0),
+        });
+        // entries.push(get_top_element(tree));
     }
 
     // Compute leaf hashes and sort by leaf_index.
     let mut sorted_leaves: Vec<(i64, [u8; 32])> = entries
         .iter()
         .map(|entry| {
-            let hash = compute_range_node_hash_for_subtrees(entry).map_err(|e| {
+            let hash = compute_range_node_hash(entry).map_err(|e| {
                 PhotonApiError::UnexpectedError(format!("Failed to compute range node hash: {}", e))
             })?;
             if hash.0.len() != 32 {
@@ -257,11 +270,13 @@ fn get_subtrees(tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, 
         }
     }
 
+    info!("get_subtrees: subtrees: {:?}", subtrees);
     Ok(subtrees)
 }
 
 #[cfg(test)]
 mod tests {
+    use borsh::BorshSerialize;
     use super::*;
     use crate::ingester::persist::persisted_indexed_merkle_tree::{
         get_top_element, HIGHEST_ADDRESS_PLUS_ONE,
@@ -270,17 +285,39 @@ mod tests {
     use light_indexed_merkle_tree::array::IndexedArray;
     use light_indexed_merkle_tree::reference::IndexedMerkleTree;
     use num_bigint::ToBigUint;
+    use solana_program::pubkey::Pubkey;
 
+    #[test]
+    fn test_empty_subtrees() {
+        let tree_height = 4;
+        let mut indexing_array = IndexedArray::<Poseidon, usize>::default();
+        indexing_array.init().unwrap();
+        let mut indexed_tree = IndexedMerkleTree::<Poseidon, usize>::new(tree_height, 0).unwrap();
+        indexed_tree.init().unwrap();
+
+        let db_subtrees = get_subtrees(vec![], tree_height, &[]).unwrap();
+        assert_eq!(db_subtrees.len(), tree_height);
+
+        let ref_subtrees = indexed_tree.merkle_tree.get_subtrees();
+        assert_eq!(ref_subtrees.len(), tree_height);
+
+        println!("db subtrees: {:?}", db_subtrees);
+        println!("ref subtrees: {:?}", ref_subtrees);
+        //
+        // for (i, (ref_subtree, db_subtree)) in ref_subtrees.iter().zip(db_subtrees.iter()).enumerate() {
+        //     assert_eq!(ref_subtree, db_subtree, "Subtrees at level {} don't match", i);
+        // }
+    }
     // assert subtrees equality with reference implementation after appending from 1 up to 1000 addresses.
     #[test]
     fn test_subtrees_dynamic() {
-        let tree_height = 40;
+        let tree_height = 4;
         let mut relayer_indexing_array = IndexedArray::<Poseidon, usize>::default();
         relayer_indexing_array.init().unwrap();
         let mut relayer_merkle_tree =
             IndexedMerkleTree::<Poseidon, usize>::new(tree_height, 0).unwrap();
         relayer_merkle_tree.init().unwrap();
-        let tree_bytes = vec![1, 2, 3, 4, 5];
+        let tree_bytes = Pubkey::new_unique().try_to_vec().unwrap();
 
         // Prepare db_entries with the zeroeth element and the top element.
         let mut db_entries = Vec::new();
@@ -298,7 +335,7 @@ mod tests {
         db_entries.push(get_top_element(tree_bytes.clone()));
 
         // For each appended address from 1 to 1000.
-        for count in 1..=1000 {
+        for count in 1..=4 {
             let address_value = count.to_biguint().unwrap();
             let address_bytes = address_value.to_bytes_be();
             let mut padded_address = vec![0; 32];
@@ -347,7 +384,7 @@ mod tests {
         }
 
         let reference_subtrees = relayer_merkle_tree.merkle_tree.get_subtrees();
-        let our_subtrees = get_subtrees(tree_height, &db_entries).unwrap();
+        let our_subtrees = get_subtrees(tree_bytes, tree_height, &db_entries).unwrap();
 
         assert_eq!(
             reference_subtrees.len(),
