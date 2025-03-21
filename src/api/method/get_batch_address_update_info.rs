@@ -17,7 +17,7 @@ use crate::dao::generated::indexed_trees;
 use crate::dao::generated::indexed_trees::Model;
 use crate::ingester::parser::tree_info::TreeInfo;
 use crate::ingester::persist::compute_parent_hash;
-use crate::ingester::persist::persisted_indexed_merkle_tree::{compute_range_node_hash, compute_range_node_hash_for_subtrees, format_bytes, get_top_element, get_zeroeth_exclusion_range, HIGHEST_ADDRESS_PLUS_ONE};
+use crate::ingester::persist::persisted_indexed_merkle_tree::{compute_range_node_hash, format_bytes, get_zeroeth_exclusion_range, HIGHEST_ADDRESS_PLUS_ONE};
 use crate::ingester::persist::persisted_state_tree::ZERO_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]

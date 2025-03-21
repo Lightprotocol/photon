@@ -77,18 +77,15 @@ solana-program = "1.18.0"
 solana-sdk = "1.18.0"
 solana-transaction-status = "1.18.0"
 
-light-merkle-tree-metadata = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-] }
-light-concurrent-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-] }
-light-sdk = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-] }
-light-compressed-account = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-] }
-light-batched-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-] }
-light-prover-client = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-] }
+light-batched-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "feaf512db877605f2935bd3fbf218cb3cec844e2" }
+light-compressed-account = { git = "https://github.com/Lightprotocol/light-protocol", rev = "feaf512db877605f2935bd3fbf218cb3cec844e2" }
+light-concurrent-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "feaf512db877605f2935bd3fbf218cb3cec844e2" }
+light-hasher = { git = "https://github.com/Lightprotocol/light-protocol", rev = "feaf512db877605f2935bd3fbf218cb3cec844e2" }
+light-indexed-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "feaf512db877605f2935bd3fbf218cb3cec844e2" }
+light-merkle-tree-metadata = { git = "https://github.com/Lightprotocol/light-protocol", rev = "feaf512db877605f2935bd3fbf218cb3cec844e2" }
+light-merkle-tree-reference = { git = "https://github.com/Lightprotocol/light-protocol", rev = "feaf512db877605f2935bd3fbf218cb3cec844e2" }
+light-prover-client = { git = "https://github.com/Lightprotocol/light-protocol", rev = "feaf512db877605f2935bd3fbf218cb3cec844e2" }
+light-sdk = { git = "https://github.com/Lightprotocol/light-protocol", rev = "feaf512db877605f2935bd3fbf218cb3cec844e2" }
 
 sqlx = { version = "0.6.2", features = [
     "macros",
@@ -110,7 +107,7 @@ reqwest = { version = "0.12.4", features = ["stream"] }
 tokio = { version = "1.43.0", features = ["full"] }
 tower = { version = "0.4.13", features = ["full"] }
 tower-http = { version = "0.3.5", features = ["full"] }
-tracing = "0.1.35"
+tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.16", features = [
     "json",
     "env-filter",
@@ -132,9 +129,6 @@ rust-s3 = "0.34.0"
 [dev-dependencies]
 function_name = "0.3.0"
 serial_test = "2.0.0"
-light-merkle-tree-reference = { path = "../light-protocol/program-tests/merkle-tree" }
-light-indexed-merkle-tree = { path = "../light-protocol/program-libs/indexed-merkle-tree" }
-light-hasher = { path = "../light-protocol/program-libs/hasher" }
 
 [profile.dev]
 # Do not produce debug info for ~40% faster incremental compilation.
