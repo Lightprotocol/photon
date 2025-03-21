@@ -1,8 +1,5 @@
-use log::info;
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, Statement, TransactionTrait,
-};
+use std::collections::HashMap;
+use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder, Statement, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -13,7 +10,7 @@ use crate::api::method::get_multiple_new_address_proofs::{
 use crate::common::typedefs::context::Context;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
-use crate::dao::generated::indexed_trees;
+use crate::dao::generated::{indexed_trees, state_trees};
 use crate::dao::generated::indexed_trees::Model;
 use crate::ingester::parser::tree_info::TreeInfo;
 use crate::ingester::persist::compute_parent_hash;
@@ -61,7 +58,6 @@ pub async fn get_batch_address_update_info(
     conn: &DatabaseConnection,
     request: GetBatchAddressUpdateInfoRequest,
 ) -> Result<GetBatchAddressUpdateInfoResponse, PhotonApiError> {
-    info!("get_batch_address_update_info: {:?}", request);
     let batch_size = request.batch_size;
     let merkle_tree_pubkey = request.tree;
     let tree_info = TreeInfo::get(&merkle_tree_pubkey.to_base58())
@@ -142,19 +138,7 @@ pub async fn get_batch_address_update_info(
     // 4. Get non-inclusion proofs for each address.
     let non_inclusion_proofs =
         get_multiple_new_address_proofs_helper(&tx, addresses_with_trees).await?;
-
-    // 5. Retrieve indexed tree entries and compute subtrees.
-    let mut entries = indexed_trees::Entity::find()
-        .filter(indexed_trees::Column::Tree.eq(merkle_tree.clone()))
-        .order_by_asc(indexed_trees::Column::LeafIndex)
-        .all(&tx)
-        .await
-        .map_err(|e| PhotonApiError::UnexpectedError(format!("DB error: {}", e)))?;
-    if entries.is_empty() {
-        let entry = get_zeroeth_exclusion_range(merkle_tree.clone());
-        entries.push(entry);
-    }
-    let subtrees = get_subtrees(merkle_tree, tree_info.height as usize, &entries)?;
+    let subtrees = get_subtrees(&tx, merkle_tree, tree_info.height as usize).await?;
 
     Ok(GetBatchAddressUpdateInfoResponse {
         context,
@@ -165,242 +149,39 @@ pub async fn get_batch_address_update_info(
     })
 }
 
-fn get_subtrees(tree: Vec<u8>, tree_height: usize, entries: &[Model]) -> Result<Vec<[u8; 32]>, PhotonApiError> {
-    info!("get_subtrees: tree: {:?}, tree_height: {}, entries: {:?}", tree, tree_height, entries);
-    let mut entries = Vec::from(entries);
+async fn get_subtrees(txn: &DatabaseTransaction, tree: Vec<u8>, tree_height: usize) -> Result<Vec<[u8; 32]>, PhotonApiError> {
     let mut subtrees = vec![[0u8; 32]; tree_height];
-    if entries.is_empty() {
-        entries.push(indexed_trees::Model {
-            tree: tree.clone(),
-            leaf_index: 0,
-            value: vec![0; 32],
-            next_index: 1,
-            next_value: vec![0]
-                .into_iter()
-                .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
-                .collect(),
-            seq: Some(0),
-        });
-        // entries.push(get_top_element(tree));
+    let tree_nodes = state_trees::Entity::find()
+        .filter(state_trees::Column::Tree.eq(tree.clone()))
+        .all(txn)
+        .await
+        .map_err(|e| PhotonApiError::UnexpectedError(format!("Failed to fetch state tree nodes: {}", e)))?;
+
+    let mut nodes_by_level: HashMap<i64, Vec<state_trees::Model>> = HashMap::new();
+    for node in tree_nodes {
+        nodes_by_level.entry(node.level).or_default().push(node);
     }
 
-    // Compute leaf hashes and sort by leaf_index.
-    let mut sorted_leaves: Vec<(i64, [u8; 32])> = entries
-        .iter()
-        .map(|entry| {
-            let hash = compute_range_node_hash(entry).map_err(|e| {
-                PhotonApiError::UnexpectedError(format!("Failed to compute range node hash: {}", e))
-            })?;
-            if hash.0.len() != 32 {
-                return Err(PhotonApiError::UnexpectedError(
-                    "Computed hash is not 32 bytes".to_string(),
-                ));
-            }
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&hash.0);
-            Ok((entry.leaf_index, arr))
-        })
-        .collect::<Result<_, _>>()?;
-    sorted_leaves.sort_by_key(|(idx, _)| *idx);
-    let leaf_level: Vec<[u8; 32]> = sorted_leaves.into_iter().map(|(_, hash)| hash).collect();
+    for level in 0..tree_height {
+        if let Some(level_nodes) = nodes_by_level.get(&(level as i64)) {
+            let mut sorted_nodes = level_nodes.clone();
+            sorted_nodes.sort_by_key(|node| node.node_idx);
 
-    // Build layers upward from the leaves.
-    let mut layers: Vec<Vec<[u8; 32]>> = Vec::new();
-    layers.push(leaf_level);
-
-    while layers.len() < tree_height {
-        let last_layer = layers.last().unwrap();
-        if last_layer.is_empty() {
-            break;
-        }
-        let mut next_layer = Vec::new();
-        let len = last_layer.len();
-        let mut i = 0;
-        while i < len {
-            if i + 1 < len {
-                let parent =
-                    compute_parent_hash(last_layer[i].to_vec(), last_layer[i + 1].to_vec())
-                        .map_err(|e| {
-                            PhotonApiError::UnexpectedError(format!(
-                                "Failed to compute parent hash: {}",
-                                e
-                            ))
-                        })?;
-                if parent.len() < 32 {
-                    return Err(PhotonApiError::UnexpectedError(
-                        "Parent hash length is less than 32".to_string(),
-                    ));
-                }
-                let mut parent_arr = [0u8; 32];
-                parent_arr.copy_from_slice(&parent[..32]);
-                next_layer.push(parent_arr);
+            let selected_node = if sorted_nodes.len() % 2 == 0 && sorted_nodes.len() > 1 {
+                &sorted_nodes[sorted_nodes.len() - 2]
+            } else if !sorted_nodes.is_empty() {
+                &sorted_nodes[sorted_nodes.len() - 1]
             } else {
-                // For an unpaired node, use a default zero value (level-specific).
-                let default_right = ZERO_BYTES[layers.len() - 1];
-                let parent = compute_parent_hash(last_layer[i].to_vec(), default_right.to_vec())
-                    .map_err(|e| {
-                        PhotonApiError::UnexpectedError(format!(
-                            "Failed to compute parent hash: {}",
-                            e
-                        ))
-                    })?;
-                if parent.len() < 32 {
-                    return Err(PhotonApiError::UnexpectedError(
-                        "Parent hash length is less than 32".to_string(),
-                    ));
-                }
-                let mut parent_arr = [0u8; 32];
-                parent_arr.copy_from_slice(&parent[..32]);
-                next_layer.push(parent_arr);
-            }
-            i += 2;
-        }
-        layers.push(next_layer);
-    }
-
-    // For each level choose the rightmost left node.
-    for (level, layer) in layers.iter().enumerate() {
-        if !layer.is_empty() {
-            let selected = if layer.len() % 2 == 0 {
-                layer[layer.len() - 2]
-            } else {
-                layer[layer.len() - 1]
+                continue;
             };
-            subtrees[level] = selected;
+
+            if selected_node.hash.len() == 32 {
+                let mut hash_array = [0u8; 32];
+                hash_array.copy_from_slice(&selected_node.hash);
+                subtrees[level] = hash_array;
+            }
         }
     }
 
-    info!("get_subtrees: subtrees: {:?}", subtrees);
     Ok(subtrees)
-}
-
-#[cfg(test)]
-mod tests {
-    use borsh::BorshSerialize;
-    use super::*;
-    use crate::ingester::persist::persisted_indexed_merkle_tree::{
-        get_top_element, HIGHEST_ADDRESS_PLUS_ONE,
-    };
-    use light_hasher::Poseidon;
-    use light_indexed_merkle_tree::array::IndexedArray;
-    use light_indexed_merkle_tree::reference::IndexedMerkleTree;
-    use num_bigint::ToBigUint;
-    use solana_program::pubkey::Pubkey;
-
-    #[test]
-    fn test_empty_subtrees() {
-        let tree_height = 4;
-        let mut indexing_array = IndexedArray::<Poseidon, usize>::default();
-        indexing_array.init().unwrap();
-        let mut indexed_tree = IndexedMerkleTree::<Poseidon, usize>::new(tree_height, 0).unwrap();
-        indexed_tree.init().unwrap();
-
-        let db_subtrees = get_subtrees(vec![], tree_height, &[]).unwrap();
-        assert_eq!(db_subtrees.len(), tree_height);
-
-        let ref_subtrees = indexed_tree.merkle_tree.get_subtrees();
-        assert_eq!(ref_subtrees.len(), tree_height);
-
-        println!("db subtrees: {:?}", db_subtrees);
-        println!("ref subtrees: {:?}", ref_subtrees);
-        //
-        // for (i, (ref_subtree, db_subtree)) in ref_subtrees.iter().zip(db_subtrees.iter()).enumerate() {
-        //     assert_eq!(ref_subtree, db_subtree, "Subtrees at level {} don't match", i);
-        // }
-    }
-    // assert subtrees equality with reference implementation after appending from 1 up to 1000 addresses.
-    #[test]
-    fn test_subtrees_dynamic() {
-        let tree_height = 4;
-        let mut relayer_indexing_array = IndexedArray::<Poseidon, usize>::default();
-        relayer_indexing_array.init().unwrap();
-        let mut relayer_merkle_tree =
-            IndexedMerkleTree::<Poseidon, usize>::new(tree_height, 0).unwrap();
-        relayer_merkle_tree.init().unwrap();
-        let tree_bytes = Pubkey::new_unique().try_to_vec().unwrap();
-
-        // Prepare db_entries with the zeroeth element and the top element.
-        let mut db_entries = Vec::new();
-        db_entries.push(indexed_trees::Model {
-            tree: tree_bytes.clone(),
-            leaf_index: 0,
-            value: vec![0; 32],
-            next_index: 1,
-            next_value: vec![0]
-                .into_iter()
-                .chain(HIGHEST_ADDRESS_PLUS_ONE.to_bytes_be())
-                .collect(),
-            seq: Some(0),
-        });
-        db_entries.push(get_top_element(tree_bytes.clone()));
-
-        // For each appended address from 1 to 1000.
-        for count in 1..=4 {
-            let address_value = count.to_biguint().unwrap();
-            let address_bytes = address_value.to_bytes_be();
-            let mut padded_address = vec![0; 32];
-            if address_bytes.len() <= 32 {
-                let start_idx = 32 - address_bytes.len();
-                padded_address[start_idx..].copy_from_slice(&address_bytes);
-            } else {
-                padded_address.copy_from_slice(&address_bytes[0..32]);
-            }
-
-            let new_index = db_entries.len() as i64;
-            // Create a new model with a placeholder next pointer.
-            let new_entry = indexed_trees::Model {
-                tree: tree_bytes.clone(),
-                leaf_index: new_index,
-                value: padded_address.clone(),
-                next_index: 0,
-                next_value: vec![0; 32],
-                seq: Some(1),
-            };
-
-            // Update chain pointers:
-            if new_index == 2 {
-                // First appended element: update the zeroeth element pointer.
-                db_entries[0].next_index = new_index;
-                db_entries[0].next_value = padded_address.clone();
-            } else {
-                // Update the previously appended element.
-                if let Some(prev) = db_entries.get_mut((new_index - 1) as usize) {
-                    prev.next_index = new_index;
-                    prev.next_value = padded_address.clone();
-                }
-            }
-            db_entries.push(new_entry);
-
-            // Append to the reference Merkle tree.
-            relayer_merkle_tree
-                .append(&address_value, &mut relayer_indexing_array)
-                .unwrap();
-        }
-        // After all appends, update the last appended element to point back to the top element.
-        let top_value = db_entries[1].value.clone();
-        if let Some(last) = db_entries.last_mut() {
-            last.next_index = 1;
-            last.next_value = top_value;
-        }
-
-        let reference_subtrees = relayer_merkle_tree.merkle_tree.get_subtrees();
-        let our_subtrees = get_subtrees(tree_bytes, tree_height, &db_entries).unwrap();
-
-        assert_eq!(
-            reference_subtrees.len(),
-            our_subtrees.len(),
-            "Subtrees arrays should have the same length"
-        );
-        for (i, (ref_subtree, our_subtree)) in reference_subtrees
-            .iter()
-            .zip(our_subtrees.iter())
-            .enumerate()
-        {
-            assert_eq!(
-                ref_subtree, our_subtree,
-                "Subtrees at level {} don't match after adding {} addresses",
-                i, 1000
-            );
-        }
-    }
 }

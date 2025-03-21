@@ -95,7 +95,6 @@ pub async fn get_exclusion_range_with_proof(
     tree_height: u32,
     value: Vec<u8>,
 ) -> Result<(indexed_trees::Model, MerkleProofWithContext), PhotonApiError> {
-    println!("get_exclusion_range_with_proof tree: {:?} tree_height: {:?} value: {:?}", tree, tree_height, value);
     let btree = query_next_smallest_elements(txn, vec![value.clone()], tree.clone())
         .await
         .map_err(|e| {
@@ -143,9 +142,7 @@ pub async fn get_exclusion_range_with_proof(
             // HACK: Fixed value while not supporting forester.
             root_seq: 3,
         };
-        println!("validating merkle proof");
         merkle_proof.validate()?;
-        println!("merkle proof validated");
         return Ok((zeroeth_element, merkle_proof));
     }
 
