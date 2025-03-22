@@ -371,7 +371,6 @@ async fn append_addresses(
     txn: &DatabaseTransaction,
     addresses: &[AddressQueueUpdate],
 ) -> Result<(), IngesterError> {
-    println!("appending addresses");
     let mut address_models = Vec::new();
 
     for address in addresses {
@@ -382,8 +381,6 @@ async fn append_addresses(
         });
     }
 
-    println!("address_models: {:?}", address_models);
-
     let query = address_queue::Entity::insert_many(address_models)
         .on_conflict(
             OnConflict::column(address_queue::Column::Address)
@@ -391,15 +388,7 @@ async fn append_addresses(
                 .to_owned(),
         )
         .build(txn.get_database_backend());
-    let result = txn.execute(query).await;
-    match result {
-        Ok(_) => {
-            println!("addresses appended");
-        }
-        Err(e) => {
-            println!("error: {:?}", e);
-        }
-    }
+    txn.execute(query).await?;
 
     Ok(())
 }

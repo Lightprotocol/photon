@@ -156,8 +156,6 @@ pub async fn get_validity_proof(
         PhotonApiError::UnexpectedError(format!("Got an error while serializing the request {}", e))
     })?;
 
-    println!("json_body: {}", json_body);
-
     let res = client
         .post(&inclusion_proof_url)
         .body(json_body.clone())

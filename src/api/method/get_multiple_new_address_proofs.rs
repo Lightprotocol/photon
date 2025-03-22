@@ -51,7 +51,6 @@ pub async fn get_multiple_new_address_proofs_helper(
     txn: &DatabaseTransaction,
     addresses: Vec<AddressWithTree>,
 ) -> Result<Vec<MerkleContextWithNewAddressProof>, PhotonApiError> {
-    println!("get_multiple_new_address_proofs_helper addresses: {:?}", addresses);
     if addresses.is_empty() {
         return Err(PhotonApiError::ValidationError(
             "No addresses provided".to_string(),

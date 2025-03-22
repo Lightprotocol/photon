@@ -59,9 +59,9 @@ pub async fn persist_batch_events(
 /// Persists a batch append event.
 /// 1. Create leaf nodes with the account hash as leaf.
 /// 2. Remove inserted elements from the database output queue.
-async fn persist_batch_append_event<'a>(
+async fn persist_batch_append_event(
     txn: &DatabaseTransaction,
-    batch_append_event: &'a BatchEvent,
+    batch_append_event: &BatchEvent,
     leaf_nodes: &mut Vec<LeafNode>,
 ) -> Result<(), IngesterError> {
     // 1. Create leaf nodes with the account hash as leaf.
@@ -116,9 +116,9 @@ async fn persist_batch_append_event<'a>(
 /// 1. Create leaf nodes with nullifier as leaf.
 /// 2. Mark elements as nullified in tree
 ///     and remove them from the database nullifier queue.
-async fn persist_batch_nullify_event<'a>(
+async fn persist_batch_nullify_event(
     txn: &DatabaseTransaction,
-    batch_nullify_event: &'a BatchEvent,
+    batch_nullify_event: &BatchEvent,
     leaf_nodes: &mut Vec<LeafNode>,
 ) -> Result<(), IngesterError> {
     // 1. Create leaf nodes with nullifier as leaf.
@@ -186,7 +186,6 @@ async fn persist_batch_address_append_event(
     txn: &DatabaseTransaction,
     batch_address_append_event: &BatchEvent
 ) -> Result<(), IngesterError> {
-    println!("persist_batch_address_append_event: {:?}", batch_address_append_event);
     let addresses = address_queue::Entity::find()
         .filter(
             address_queue::Column::QueueIndex
@@ -198,13 +197,7 @@ async fn persist_batch_address_append_event(
         .await?;
 
     let address_values = addresses.iter().map(|address| address.address.clone()).collect::<Vec<_>>();
-    println!("addresses to append {:?}", address_values);
-    println!("addresses len {:?}", address_values.len());
-
-    let result = multi_append(txn, address_values, batch_address_append_event.merkle_tree_pubkey.to_vec()).await?;
-
-    println!("result {:?}", result);
-
+    multi_append(txn, address_values, batch_address_append_event.merkle_tree_pubkey.to_vec()).await?;
     address_queue::Entity::delete_many()
         .filter(
             address_queue::Column::QueueIndex
