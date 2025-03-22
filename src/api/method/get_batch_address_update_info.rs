@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder, Statement, TransactionTrait};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, EntityTrait, Statement, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -10,12 +9,8 @@ use crate::api::method::get_multiple_new_address_proofs::{
 use crate::common::typedefs::context::Context;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
-use crate::dao::generated::{indexed_trees, state_trees};
-use crate::dao::generated::indexed_trees::Model;
 use crate::ingester::parser::tree_info::TreeInfo;
-use crate::ingester::persist::compute_parent_hash;
-use crate::ingester::persist::persisted_indexed_merkle_tree::{compute_range_node_hash, format_bytes, get_zeroeth_exclusion_range, HIGHEST_ADDRESS_PLUS_ONE};
-use crate::ingester::persist::persisted_state_tree::ZERO_BYTES;
+use crate::ingester::persist::persisted_indexed_merkle_tree::format_bytes;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -149,37 +144,74 @@ pub async fn get_batch_address_update_info(
     })
 }
 
-async fn get_subtrees(txn: &DatabaseTransaction, tree: Vec<u8>, tree_height: usize) -> Result<Vec<[u8; 32]>, PhotonApiError> {
+async fn get_subtrees(
+    txn: &DatabaseTransaction,
+    tree: Vec<u8>,
+    tree_height: usize
+) -> Result<Vec<[u8; 32]>, PhotonApiError> {
     let mut subtrees = vec![[0u8; 32]; tree_height];
-    let tree_nodes = state_trees::Entity::find()
-        .filter(state_trees::Column::Tree.eq(tree.clone()))
-        .all(txn)
-        .await
-        .map_err(|e| PhotonApiError::UnexpectedError(format!("Failed to fetch state tree nodes: {}", e)))?;
 
-    let mut nodes_by_level: HashMap<i64, Vec<state_trees::Model>> = HashMap::new();
-    for node in tree_nodes {
-        nodes_by_level.entry(node.level).or_default().push(node);
-    }
+    let query = match txn.get_database_backend() {
+        DatabaseBackend::Postgres => {
+            Statement::from_string(
+                DatabaseBackend::Postgres,
+                format!(
+                    "WITH ranked_nodes AS (
+                        SELECT level, node_idx, hash,
+                            ROW_NUMBER() OVER (PARTITION BY level ORDER BY node_idx DESC) as rank,
+                            COUNT(*) OVER (PARTITION BY level) as count
+                        FROM state_trees
+                        WHERE tree = {}
+                    )
+                    SELECT level, hash
+                    FROM ranked_nodes
+                    WHERE (count % 2 = 0 AND rank = 2) OR (count % 2 = 1 AND rank = 1)",
+                    format_bytes(tree.clone(), DatabaseBackend::Postgres)
+                ),
+            )
+        },
+        DatabaseBackend::Sqlite => {
+            Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT t1.level, t1.hash
+                    FROM state_trees t1
+                    JOIN (
+                        SELECT level,
+                               MAX(node_idx) as max_idx,
+                               COUNT(*) as count
+                        FROM state_trees
+                        WHERE tree = {}
+                        GROUP BY level
+                    ) t2 ON t1.level = t2.level
+                    WHERE t1.tree = {} AND
+                          ((t2.count % 2 = 0 AND t1.node_idx = t2.max_idx - 1) OR
+                           (t2.count % 2 = 1 AND t1.node_idx = t2.max_idx))",
+                    format_bytes(tree.clone(), DatabaseBackend::Sqlite),
+                    format_bytes(tree.clone(), DatabaseBackend::Sqlite)
+                ),
+            )
+        },
+        _ => return Err(PhotonApiError::UnexpectedError("Unsupported database backend".to_string()))
+    };
 
-    for level in 0..tree_height {
-        if let Some(level_nodes) = nodes_by_level.get(&(level as i64)) {
-            let mut sorted_nodes = level_nodes.clone();
-            sorted_nodes.sort_by_key(|node| node.node_idx);
+    let results = txn.query_all(query).await.map_err(|e| {
+        PhotonApiError::UnexpectedError(format!("Failed to query nodes: {}", e))
+    })?;
 
-            let selected_node = if sorted_nodes.len() % 2 == 0 && sorted_nodes.len() > 1 {
-                &sorted_nodes[sorted_nodes.len() - 2]
-            } else if !sorted_nodes.is_empty() {
-                &sorted_nodes[sorted_nodes.len() - 1]
-            } else {
-                continue;
-            };
+    for row in results {
+        let level: i64 = row.try_get("", "level").map_err(|e| {
+            PhotonApiError::UnexpectedError(format!("Failed to extract level: {}", e))
+        })?;
 
-            if selected_node.hash.len() == 32 {
-                let mut hash_array = [0u8; 32];
-                hash_array.copy_from_slice(&selected_node.hash);
-                subtrees[level] = hash_array;
-            }
+        let hash: Vec<u8> = row.try_get("", "hash").map_err(|e| {
+            PhotonApiError::UnexpectedError(format!("Failed to extract hash: {}", e))
+        })?;
+
+        if level >= 0 && level < tree_height as i64 && hash.len() == 32 {
+            let mut hash_array = [0u8; 32];
+            hash_array.copy_from_slice(&hash);
+            subtrees[level as usize] = hash_array;
         }
     }
 
