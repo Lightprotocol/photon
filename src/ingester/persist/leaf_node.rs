@@ -96,9 +96,8 @@ pub async fn persist_leaf_nodes(
     let mut models_to_updates = HashMap::new();
 
     for leaf_node in leaf_nodes.clone() {
-        let node_idx = leaf_node.node_index(
-            TreeInfo::height(&leaf_node.tree.0.to_string()).unwrap(),
-        ); // TODO: handle error
+        let node_idx =
+            leaf_node.node_index(TreeInfo::height(&leaf_node.tree.0.to_string()).unwrap()); // TODO: handle error
         let tree = leaf_node.tree;
         let key = (tree.to_bytes_vec(), node_idx);
 
@@ -130,9 +129,9 @@ pub async fn persist_leaf_nodes(
     let all_ancestors = leaf_nodes
         .iter()
         .flat_map(|leaf_node| {
-            get_node_direct_ancestors(leaf_node.node_index(
-                TreeInfo::height(&leaf_node.tree.0.to_string()).unwrap(),
-            )) // TODO: handle error
+            get_node_direct_ancestors(
+                leaf_node.node_index(TreeInfo::height(&leaf_node.tree.0.to_string()).unwrap()),
+            ) // TODO: handle error
             .iter()
             .enumerate()
             .map(move |(i, &idx)| (leaf_node.tree.to_bytes_vec(), idx, i))

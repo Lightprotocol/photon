@@ -7,13 +7,13 @@ use crate::ingester::parser::{
     indexer_events::MerkleTreeEvent, merkle_tree_events_parser::IndexedBatchEvents,
 };
 use crate::ingester::persist::leaf_node::{persist_leaf_nodes, LeafNode};
+use crate::ingester::persist::persisted_indexed_merkle_tree::multi_append;
 use crate::ingester::persist::MAX_SQL_INSERTS;
 use crate::migration::Expr;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder,
     QueryTrait,
 };
-use crate::ingester::persist::persisted_indexed_merkle_tree::multi_append;
 
 /// We need to find the events of the same tree:
 /// - order them by sequence number and execute them in order
@@ -184,25 +184,39 @@ async fn persist_batch_nullify_event(
 /// 2. Remove inserted elements from the database address queue.
 async fn persist_batch_address_append_event(
     txn: &DatabaseTransaction,
-    batch_address_append_event: &BatchEvent
+    batch_address_append_event: &BatchEvent,
 ) -> Result<(), IngesterError> {
     let addresses = address_queue::Entity::find()
         .filter(
             address_queue::Column::QueueIndex
                 .lt(batch_address_append_event.new_next_index as i64 - 1)
-                .and(address_queue::Column::Tree.eq(batch_address_append_event.merkle_tree_pubkey.to_vec())),
+                .and(
+                    address_queue::Column::Tree
+                        .eq(batch_address_append_event.merkle_tree_pubkey.to_vec()),
+                ),
         )
         .order_by_asc(address_queue::Column::QueueIndex)
         .all(txn)
         .await?;
 
-    let address_values = addresses.iter().map(|address| address.address.clone()).collect::<Vec<_>>();
-    multi_append(txn, address_values, batch_address_append_event.merkle_tree_pubkey.to_vec()).await?;
+    let address_values = addresses
+        .iter()
+        .map(|address| address.address.clone())
+        .collect::<Vec<_>>();
+    multi_append(
+        txn,
+        address_values,
+        batch_address_append_event.merkle_tree_pubkey.to_vec(),
+    )
+    .await?;
     address_queue::Entity::delete_many()
         .filter(
             address_queue::Column::QueueIndex
                 .lt(batch_address_append_event.new_next_index as i64 - 1)
-                .and(address_queue::Column::Tree.eq(batch_address_append_event.merkle_tree_pubkey.to_vec())),
+                .and(
+                    address_queue::Column::Tree
+                        .eq(batch_address_append_event.merkle_tree_pubkey.to_vec()),
+                ),
         )
         .exec(txn)
         .await?;

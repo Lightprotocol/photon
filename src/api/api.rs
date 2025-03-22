@@ -61,6 +61,10 @@ use super::{
         get_indexer_slot::get_indexer_slot,
     },
 };
+use crate::api::method::get_batch_address_update_info::{
+    get_batch_address_update_info, GetBatchAddressUpdateInfoRequest,
+    GetBatchAddressUpdateInfoResponse,
+};
 use crate::api::method::get_compressed_account_proof::{
     get_compressed_account_proof_v2, GetCompressedAccountProofResponseV2,
 };
@@ -93,7 +97,6 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use std::sync::Arc;
 use utoipa::openapi::{ObjectBuilder, RefOr, Schema, SchemaType};
 use utoipa::ToSchema;
-use crate::api::method::get_batch_address_update_info::{get_batch_address_update_info, GetBatchAddressUpdateInfoRequest, GetBatchAddressUpdateInfoResponse};
 
 pub struct PhotonApi {
     db_conn: Arc<DatabaseConnection>,

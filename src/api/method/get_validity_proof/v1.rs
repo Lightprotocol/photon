@@ -2,7 +2,9 @@ use super::common::{get_public_input_hash, hash_to_hex};
 use crate::{
     api::error::PhotonApiError, common::typedefs::serializable_pubkey::SerializablePubkey,
 };
-use light_batched_merkle_tree::constants::{DEFAULT_BATCH_ADDRESS_TREE_HEIGHT, DEFAULT_BATCH_STATE_TREE_HEIGHT};
+use light_batched_merkle_tree::constants::{
+    DEFAULT_BATCH_ADDRESS_TREE_HEIGHT, DEFAULT_BATCH_STATE_TREE_HEIGHT,
+};
 use light_batched_merkle_tree::merkle_tree_metadata::BatchedMerkleTreeMetadata;
 use light_prover_client::prove_utils::CircuitType;
 use light_sdk::STATE_MERKLE_TREE_HEIGHT;
@@ -126,7 +128,8 @@ pub async fn get_validity_proof(
         }
     };
 
-    let is_v2 = (state_tree_height == DEFAULT_BATCH_STATE_TREE_HEIGHT as usize) || (address_tree_height == DEFAULT_BATCH_ADDRESS_TREE_HEIGHT as usize);
+    let is_v2 = (state_tree_height == DEFAULT_BATCH_STATE_TREE_HEIGHT as usize)
+        || (address_tree_height == DEFAULT_BATCH_ADDRESS_TREE_HEIGHT as usize);
     let public_input_hash = if is_v2 {
         hash_to_hex(&crate::common::typedefs::hash::Hash(get_public_input_hash(
             &account_proofs,

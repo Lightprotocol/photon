@@ -27,4 +27,3 @@ pub mod get_validity_proof;
 pub mod get_batch_address_update_info;
 
 pub mod utils;
-

@@ -72,7 +72,9 @@ pub async fn get_multiple_new_address_proofs_helper(
 
     for AddressWithTree { address, tree } in addresses {
         let tree_and_queue = TreeInfo::get(&tree.to_string())
-            .ok_or(PhotonApiError::InvalidPubkey { field: tree.to_string() })?
+            .ok_or(PhotonApiError::InvalidPubkey {
+                field: tree.to_string(),
+            })?
             .clone();
 
         let (model, proof) = get_exclusion_range_with_proof(

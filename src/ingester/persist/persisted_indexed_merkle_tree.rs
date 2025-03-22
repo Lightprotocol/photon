@@ -49,7 +49,9 @@ pub fn compute_range_node_hash(node: &indexed_trees::Model) -> Result<Hash, Inge
     .map_err(|e| IngesterError::ParserError(format!("Failed to convert hash: {}", e)))
 }
 
-pub fn compute_range_node_hash_for_subtrees(node: &indexed_trees::Model) -> Result<Hash, IngesterError> {
+pub fn compute_range_node_hash_for_subtrees(
+    node: &indexed_trees::Model,
+) -> Result<Hash, IngesterError> {
     let mut poseidon = Poseidon::<Fr>::new_circom(3).unwrap();
     let next_index = node.next_index.to_be_bytes();
     Hash::try_from(
@@ -58,7 +60,7 @@ pub fn compute_range_node_hash_for_subtrees(node: &indexed_trees::Model) -> Resu
             .map_err(|e| IngesterError::ParserError(format!("Failed  to compute hash: {}", e)))
             .map(|x| x.to_vec())?,
     )
-        .map_err(|e| IngesterError::ParserError(format!("Failed to convert hash: {}", e)))
+    .map_err(|e| IngesterError::ParserError(format!("Failed to convert hash: {}", e)))
 }
 
 pub fn get_zeroeth_exclusion_range(tree: Vec<u8>) -> indexed_trees::Model {

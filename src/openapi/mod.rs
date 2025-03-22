@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use crate::api::method::get_batch_address_update_info::AddressQueueIndex;
 use crate::api::api::PhotonApi;
+use crate::api::method::get_batch_address_update_info::AddressQueueIndex;
 use crate::api::method::get_compressed_account_proof::{
     GetCompressedAccountProofResponseValue, GetCompressedAccountProofResponseValueV2,
 };

@@ -107,7 +107,6 @@ pub enum StateTreeHistories {
     LeafIdx,
 }
 
-
 #[derive(Copy, Clone, Iden)]
 pub enum AddressQueues {
     Table,

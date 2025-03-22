@@ -6,10 +6,10 @@ use crate::ingester::parser::indexer_events::{
 use crate::ingester::parser::state_update::{AddressQueueUpdate, StateUpdate};
 use crate::ingester::parser::tx_event_parser::parse_public_transaction_event;
 
+use crate::ingester::parser::tree_info::TreeInfo;
 use light_compressed_account::indexer_event::parse::event_from_light_transaction;
 use solana_program::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
-use crate::ingester::parser::tree_info::TreeInfo;
 
 pub fn parse_public_transaction_event_v2(
     program_ids: &[Pubkey],
@@ -109,7 +109,11 @@ pub fn create_state_update(
             .input_context
             .extend(event.batch_input_accounts.clone());
 
-        for (new_address, seq) in event.new_addresses.iter().zip(event.address_sequence_numbers.iter()) {
+        for (new_address, seq) in event
+            .new_addresses
+            .iter()
+            .zip(event.address_sequence_numbers.iter())
+        {
             let tree_info = TreeInfo::get(&new_address.mt_pubkey.to_string())
                 .ok_or(IngesterError::ParserError("Missing queue".to_string()))?
                 .clone();
@@ -120,7 +124,10 @@ pub fn create_state_update(
             });
         }
 
-        println!("state_update_event.addresses: {:?}", state_update_event.addresses);
+        println!(
+            "state_update_event.addresses: {:?}",
+            state_update_event.addresses
+        );
         state_updates.push(state_update_event);
     }
 
