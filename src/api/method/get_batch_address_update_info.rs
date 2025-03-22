@@ -11,6 +11,7 @@ use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::ingester::parser::tree_info::TreeInfo;
 use crate::ingester::persist::persisted_indexed_merkle_tree::format_bytes;
+use crate::ingester::persist::persisted_state_tree::get_subtrees;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -142,78 +143,4 @@ pub async fn get_batch_address_update_info(
         non_inclusion_proofs,
         subtrees,
     })
-}
-
-async fn get_subtrees(
-    txn: &DatabaseTransaction,
-    tree: Vec<u8>,
-    tree_height: usize
-) -> Result<Vec<[u8; 32]>, PhotonApiError> {
-    let mut subtrees = vec![[0u8; 32]; tree_height];
-
-    let query = match txn.get_database_backend() {
-        DatabaseBackend::Postgres => {
-            Statement::from_string(
-                DatabaseBackend::Postgres,
-                format!(
-                    "WITH ranked_nodes AS (
-                        SELECT level, node_idx, hash,
-                            ROW_NUMBER() OVER (PARTITION BY level ORDER BY node_idx DESC) as rank,
-                            COUNT(*) OVER (PARTITION BY level) as count
-                        FROM state_trees
-                        WHERE tree = {}
-                    )
-                    SELECT level, hash
-                    FROM ranked_nodes
-                    WHERE (count % 2 = 0 AND rank = 2) OR (count % 2 = 1 AND rank = 1)",
-                    format_bytes(tree.clone(), DatabaseBackend::Postgres)
-                ),
-            )
-        },
-        DatabaseBackend::Sqlite => {
-            Statement::from_string(
-                DatabaseBackend::Sqlite,
-                format!(
-                    "SELECT t1.level, t1.hash
-                    FROM state_trees t1
-                    JOIN (
-                        SELECT level,
-                               MAX(node_idx) as max_idx,
-                               COUNT(*) as count
-                        FROM state_trees
-                        WHERE tree = {}
-                        GROUP BY level
-                    ) t2 ON t1.level = t2.level
-                    WHERE t1.tree = {} AND
-                          ((t2.count % 2 = 0 AND t1.node_idx = t2.max_idx - 1) OR
-                           (t2.count % 2 = 1 AND t1.node_idx = t2.max_idx))",
-                    format_bytes(tree.clone(), DatabaseBackend::Sqlite),
-                    format_bytes(tree.clone(), DatabaseBackend::Sqlite)
-                ),
-            )
-        },
-        _ => return Err(PhotonApiError::UnexpectedError("Unsupported database backend".to_string()))
-    };
-
-    let results = txn.query_all(query).await.map_err(|e| {
-        PhotonApiError::UnexpectedError(format!("Failed to query nodes: {}", e))
-    })?;
-
-    for row in results {
-        let level: i64 = row.try_get("", "level").map_err(|e| {
-            PhotonApiError::UnexpectedError(format!("Failed to extract level: {}", e))
-        })?;
-
-        let hash: Vec<u8> = row.try_get("", "hash").map_err(|e| {
-            PhotonApiError::UnexpectedError(format!("Failed to extract hash: {}", e))
-        })?;
-
-        if level >= 0 && level < tree_height as i64 && hash.len() == 32 {
-            let mut hash_array = [0u8; 32];
-            hash_array.copy_from_slice(&hash);
-            subtrees[level as usize] = hash_array;
-        }
-    }
-
-    Ok(subtrees)
 }
