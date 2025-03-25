@@ -4,7 +4,7 @@ use crate::api::method::get_multiple_new_address_proofs::{
 use crate::common::typedefs::context::Context;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
-use crate::ingester::parser::tree_info::TreeInfo;
+use crate::ingester::parser::tree_info::TreeInfoService;
 use crate::ingester::persist::MerkleProofWithContext;
 use borsh::BorshSerialize;
 use jsonrpsee_core::Serialize;
@@ -103,8 +103,44 @@ pub struct GetValidityProofResponseV2 {
     pub context: Context,
 }
 
-impl From<GetValidityProofResponse> for GetValidityProofResponseV2 {
-    fn from(response: GetValidityProofResponse) -> Self {
+// Implementation moved to from_v1 async method
+// Remove synchronous From implementation - use only the async version
+
+impl GetValidityProofResponseV2 {
+    // Keep this method for async contexts where we need to look up from DB
+    pub async fn from_v1_async(db: &sea_orm::DatabaseConnection, response: GetValidityProofResponse) -> Self {
+        use futures::StreamExt;
+        
+        let futures = futures::stream::FuturesUnordered::new();
+        
+        for tree in &response.value.merkleTrees {
+            let tree_str = tree.clone();
+            let db_ref = db;
+            futures.push(async move {
+                match TreeInfoService::get_tree_info(&*db_ref, &tree_str).await {
+                    Ok(Some(tree_info)) => MerkleContextV2 {
+                        tree_type: tree_info.tree_type as u16,
+                        tree: SerializablePubkey::from(tree_info.tree),
+                        queue: SerializablePubkey::from(tree_info.queue),
+                        cpi_context: None,
+                        next_tree_context: None,
+                    },
+                    _ => {
+                        // Fallback to defaults if tree not found or error occurred
+                        MerkleContextV2 {
+                            tree_type: 0,
+                            tree: SerializablePubkey::try_from(vec![0; 32]).unwrap_or_default(),
+                            queue: SerializablePubkey::try_from(vec![0; 32]).unwrap_or_default(),
+                            cpi_context: None,
+                            next_tree_context: None,
+                        }
+                    }
+                }
+            });
+        }
+        
+        let merkle_contexts = futures.collect::<Vec<_>>().await;
+        
         GetValidityProofResponseV2 {
             value: CompressedProofWithContextV2 {
                 compressedProof: Some(response.value.compressedProof),
@@ -120,21 +156,7 @@ impl From<GetValidityProofResponse> for GetValidityProofResponseV2 {
                     .collect(),
                 leafIndices: response.value.leafIndices,
                 leaves: response.value.leaves,
-                merkle_contexts: response
-                    .value
-                    .merkleTrees
-                    .iter()
-                    .map(|tree| {
-                        let tree_info = TreeInfo::get(tree.as_str()).unwrap(); // TODO: remove unwrap
-                        MerkleContextV2 {
-                            tree_type: tree_info.tree_type as u16,
-                            tree: SerializablePubkey::from(tree_info.tree),
-                            queue: SerializablePubkey::from(tree_info.queue),
-                            cpi_context: None,
-                            next_tree_context: None,
-                        }
-                    })
-                    .collect(),
+                merkle_contexts,
             },
             context: response.context,
         }

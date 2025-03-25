@@ -1,8 +1,10 @@
-use lazy_static::lazy_static;
-use light_merkle_tree_metadata::merkle_tree::TreeType;
-use solana_program::pubkey;
+use anyhow::Result;
+use light_compressed_account::TreeType;
+use sea_orm::{ConnectionTrait, EntityTrait, Set, DatabaseTransaction};
 use solana_program::pubkey::Pubkey;
-use std::collections::HashMap;
+
+use crate::dao::generated::tree_metadata::{self, ActiveModel, Entity as TreeMetadata};
+use crate::ingester::parser::indexer_events::MerkleTreeSequenceNumberV2;
 
 pub const DEFAULT_TREE_HEIGHT: u32 = 32 + 1;
 
@@ -15,181 +17,80 @@ pub struct TreeInfo {
 }
 
 impl TreeInfo {
-    pub fn get(pubkey: &str) -> Option<&TreeInfo> {
-        QUEUE_TREE_MAPPING.get(pubkey)
-    }
-
-    pub fn height(pubkey: &str) -> Option<u32> {
-        QUEUE_TREE_MAPPING.get(pubkey).map(|x| x.height + 1)
+    
+    pub fn from_sequence_number(seq_num: &MerkleTreeSequenceNumberV2) -> Self {
+        Self {
+            tree: seq_num.tree_pubkey,
+            queue: seq_num.queue_pubkey,
+            height: match TreeType::from(seq_num.tree_type) {
+                TreeType::State => 26,
+                TreeType::Address => 26,
+                TreeType::BatchedState => 32,
+                TreeType::BatchedAddress => 40,
+            },
+            tree_type: TreeType::from(seq_num.tree_type),
+        }
     }
 }
 
-// TODO: add a table which stores tree metadata: tree_pubkey | queue_pubkey | type | ...
-lazy_static! {
-    pub static ref QUEUE_TREE_MAPPING: HashMap<String, TreeInfo> = {
-        let mut m = HashMap::new();
+pub struct TreeInfoService;
 
-        m.insert(
-            "6L7SzhYB3anwEQ9cphpJ1U7Scwj57bx2xueReg7R9cKU".to_string(),
-            TreeInfo {
-                tree: pubkey!("HLKs5NJ8FXkJg8BrzJt56adFYYuwg5etzDtBbQYTsixu"),
-                queue: pubkey!("6L7SzhYB3anwEQ9cphpJ1U7Scwj57bx2xueReg7R9cKU"),
-                height: 32,
-                tree_type: TreeType::BatchedState,
-            },
-        );
-
-        m.insert(
-            "smt1NamzXdq4AMqS2fS2F1i5KTYPZRhoHgWx38d8WsT".to_string(),
-            TreeInfo {
-                tree: pubkey!("smt1NamzXdq4AMqS2fS2F1i5KTYPZRhoHgWx38d8WsT"),
-                queue: pubkey!("nfq1NvQDJ2GEgnS8zt9prAe8rjjpAW1zFkrvZoBR148"),
-                height: 26,
-                tree_type: TreeType::State,
-            },
-        );
-
-        m.insert(
-            "smt2rJAFdyJJupwMKAqTNAJwvjhmiZ4JYGZmbVRw1Ho".to_string(),
-            TreeInfo {
-                tree: pubkey!("smt2rJAFdyJJupwMKAqTNAJwvjhmiZ4JYGZmbVRw1Ho"),
-                queue: pubkey!("nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X"),
-                height: 26,
-                tree_type: TreeType::State,
-            },
-        );
-
-        // TODO: update queue pubkeys
-        //  m.insert(
-        //     "smt3AFtReRGVcrP11D6bSLEaKdUmrGfaTNowMVccJeu".to_string(),
-        //     TreeAndQueue {
-        //         tree: pubkey!("smt3AFtReRGVcrP11D6bSLEaKdUmrGfaTNowMVccJeu"),
-        //         queue: pubkey!("nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X"),
-        //         height: 26,
-        //         tree_type: TreeType::State,
-        //     },
-        // );
-        //
-        //  m.insert(
-        //     "smt4vjXvdjDFzvRMUxwTWnSy4c7cKkMaHuPrGsdDH7V".to_string(),
-        //     TreeAndQueue {
-        //         tree: pubkey!("smt2rJAFdyJJupwMKAqTNAJwvjhmiZ4JYGZmbVRw1Ho"),
-        //         queue: pubkey!("smt4vjXvdjDFzvRMUxwTWnSy4c7cKkMaHuPrGsdDH7V"),
-        //         height: 26,
-        //         tree_type: TreeType::State,
-        //     },
-        // );
-        //
-        //  m.insert(
-        //     "smt5uPaQT9n6b1qAkgyonmzRxtuazA53Rddwntqistc".to_string(),
-        //     TreeAndQueue {
-        //         tree: pubkey!("smt5uPaQT9n6b1qAkgyonmzRxtuazA53Rddwntqistc"),
-        //         queue: pubkey!("nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X"),
-        //         height: 26,
-        //         tree_type: TreeType::State,
-        //     },
-        // );
-        //
-        //  m.insert(
-        //     "smt6ukQDSPPYHSshQovmiRUjG9jGFq2hW9vgrDFk5Yz".to_string(),
-        //     TreeAndQueue {
-        //         tree: pubkey!("smt6ukQDSPPYHSshQovmiRUjG9jGFq2hW9vgrDFk5Yz"),
-        //         queue: pubkey!("nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X"),
-        //         height: 26,
-        //         tree_type: TreeType::State,
-        //     },
-        // );
-        //
-        //  m.insert(
-        //     "smt7onMFkvi3RbyhQCMajudYQkB1afAFt9CDXBQTLz6".to_string(),
-        //     TreeAndQueue {
-        //         tree: pubkey!("smt7onMFkvi3RbyhQCMajudYQkB1afAFt9CDXBQTLz6"),
-        //         queue: pubkey!("nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X"),
-        //         height: 26,
-        //         tree_type: TreeType::State,
-        //     },
-        // );
-        //
-        //  m.insert(
-        //     "smt8TYxNy8SuhAdKJ8CeLtDkr2w6dgDmdz5ruiDw9Y9".to_string(),
-        //     TreeAndQueue {
-        //         tree: pubkey!("smt8TYxNy8SuhAdKJ8CeLtDkr2w6dgDmdz5ruiDw9Y9"),
-        //         queue: pubkey!("nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X"),
-        //         height: 26,
-        //         tree_type: TreeType::State,
-        //     },
-        // );
-        //
-        //  m.insert(
-        //     "smt9ReAYRF5eFjTd5gBJMn5aKwNRcmp3ub2CQr2vW7j".to_string(),
-        //     TreeAndQueue {
-        //         tree: pubkey!("smt9ReAYRF5eFjTd5gBJMn5aKwNRcmp3ub2CQr2vW7j"),
-        //         queue: pubkey!("nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X"),
-        //         height: 26,
-        //         tree_type: TreeType::State,
-        //     },
-        // );
-        //
-        //  m.insert(
-        //     "smtAvYA5UbTRyKAkAj5kHs1CmrA42t6WkVLi4c6mA1f".to_string(),
-        //     TreeAndQueue {
-        //         tree: pubkey!("smtAvYA5UbTRyKAkAj5kHs1CmrA42t6WkVLi4c6mA1f"),
-        //         queue: pubkey!("nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X"),
-        //         height: 26,
-        //         tree_type: TreeType::State,
-        //     },
-        // );
-
-         m.insert(
-            "amt1Ayt45jfbdw5YSo7iz6WZxUmnZsQTYXy82hVwyC2".to_string(),
-            TreeInfo {
-                tree: pubkey!("amt1Ayt45jfbdw5YSo7iz6WZxUmnZsQTYXy82hVwyC2"),
-                queue: pubkey!("aq1S9z4reTSQAdgWHGD2zDaS39sjGrAxbR31vxJ2F4F"),
-                height: 26,
-                tree_type: TreeType::Address,
-            },
-        );
-
-         m.insert(
-            "aq1S9z4reTSQAdgWHGD2zDaS39sjGrAxbR31vxJ2F4F".to_string(),
-            TreeInfo {
-                tree: pubkey!("amt1Ayt45jfbdw5YSo7iz6WZxUmnZsQTYXy82hVwyC2"),
-                queue: pubkey!("aq1S9z4reTSQAdgWHGD2zDaS39sjGrAxbR31vxJ2F4F"),
-                height: 26,
-                tree_type: TreeType::Address,
-            },
-        );
-
-        m.insert(
-            "HLKs5NJ8FXkJg8BrzJt56adFYYuwg5etzDtBbQYTsixu".to_string(),
-            TreeInfo {
-                tree: pubkey!("HLKs5NJ8FXkJg8BrzJt56adFYYuwg5etzDtBbQYTsixu"),
-                queue: pubkey!("6L7SzhYB3anwEQ9cphpJ1U7Scwj57bx2xueReg7R9cKU"),
-                height: 32,
-                tree_type: TreeType::BatchedState,
-            },
-        );
-
-        m.insert(
-            "nfq1NvQDJ2GEgnS8zt9prAe8rjjpAW1zFkrvZoBR148".to_string(),
-            TreeInfo {
-                tree: pubkey!("smt1NamzXdq4AMqS2fS2F1i5KTYPZRhoHgWx38d8WsT"),
-                queue: pubkey!("nfq1NvQDJ2GEgnS8zt9prAe8rjjpAW1zFkrvZoBR148"),
-                height: 26,
-                tree_type: TreeType::State,
-            },
-        );
-
-        m.insert(
-            "nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X".to_string(),
-            TreeInfo {
-                tree: pubkey!("smt2rJAFdyJJupwMKAqTNAJwvjhmiZ4JYGZmbVRw1Ho"),
-                queue: pubkey!("nfq2hgS7NYemXsFaFUCe3EMXSDSfnZnAe27jC6aPP1X"),
-                height: 26,
-                tree_type: TreeType::State,
-            },
-        );
-
-        m
-    };
+impl TreeInfoService {
+    
+    pub async fn get_tree_info(conn: &impl ConnectionTrait, pubkey: &str) -> Result<Option<TreeInfo>> {
+        if let Some(model) = TreeMetadata::find_by_tree_pubkey(pubkey)
+            .one(conn)
+            .await?
+        {
+            return Ok(Some(Self::model_to_tree_info(model)));
+        }
+        
+        if let Some(model) = TreeMetadata::find_by_queue_pubkey(pubkey)
+            .one(conn)
+            .await?
+        {
+            return Ok(Some(Self::model_to_tree_info(model)));
+        }
+        
+        Ok(None)
+    }
+    
+    pub async fn save_tree_info(txn: &DatabaseTransaction, tree_info: &TreeInfo) -> Result<()> {
+        let exists = TreeMetadata::find_by_tree_pubkey(&tree_info.tree.to_string())
+            .one(txn)
+            .await?
+            .is_some();
+            
+        if !exists {
+            let tree_metadata = ActiveModel {
+                id: Default::default(),
+                tree_pubkey: Set(tree_info.tree.to_string()),
+                queue_pubkey: Set(tree_info.queue.to_string()),
+                height: Set(tree_info.height),
+                tree_type: Set(tree_info.tree_type as i64),
+            };
+            
+            TreeMetadata::insert(tree_metadata).exec(txn).await?;
+        }
+        
+        Ok(())
+    }
+    
+    fn model_to_tree_info(model: tree_metadata::Model) -> TreeInfo {
+        TreeInfo {
+            tree: model.tree_pubkey.parse().unwrap_or_default(),
+            queue: model.queue_pubkey.parse().unwrap_or_default(),
+            height: model.height,
+            tree_type: TreeType::from(model.tree_type as u64),
+        }
+    }
+    
+    pub async fn get_tree_height(conn: &impl ConnectionTrait, pubkey: &str) -> Result<Option<u32>> {
+        Ok(Self::get_tree_info(conn, pubkey).await?.map(|x| x.height + 1))
+    }
+    
+    pub async fn save_from_sequence_number(txn: &DatabaseTransaction, seq_num: &MerkleTreeSequenceNumberV2) -> Result<()> {
+        let tree_info = TreeInfo::from_sequence_number(seq_num);
+        Self::save_tree_info(txn, &tree_info).await
+    }
 }

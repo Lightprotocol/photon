@@ -2,7 +2,7 @@ use crate::api::error::PhotonApiError;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::dao::generated::state_trees;
-use crate::ingester::parser::tree_info::TreeInfo;
+use crate::ingester::parser::tree_info::TreeInfoService;
 use crate::ingester::persist::leaf_node::{leaf_index_to_node_index, LeafNode};
 use crate::ingester::persist::persisted_state_tree::{get_proof_nodes, get_proof_path, ZERO_BYTES};
 use crate::ingester::persist::MerkleProofWithContext;
@@ -57,12 +57,17 @@ pub async fn get_multiple_compressed_leaf_proofs_by_indices(
                 hash: Hash::from(ZERO_BYTES[0]),
                 seq: None,
             };
-            let tree_height = TreeInfo::get(&merkle_tree_pubkey.to_string())
-                .ok_or(PhotonApiError::RecordNotFound(format!(
+            let tree_info = TreeInfoService::get_tree_info(txn, &merkle_tree_pubkey.to_string())
+                .await
+                .map_err(|_| PhotonApiError::RecordNotFound(format!(
                     "Tree info not found for tree: {}",
                     merkle_tree_pubkey
                 )))?
-                .height;
+                .ok_or(PhotonApiError::RecordNotFound(format!(
+                    "Tree info not found for tree: {}",
+                    merkle_tree_pubkey
+                )))?;
+            let tree_height = tree_info.height;
             let node_idx = leaf_index_to_node_index(zero_leaf.leaf_index, (tree_height + 1) as u32);
             leaf_nodes.push((zero_leaf.clone(), node_idx));
         }

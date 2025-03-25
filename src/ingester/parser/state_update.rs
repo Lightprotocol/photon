@@ -1,4 +1,4 @@
-use super::{indexer_events::RawIndexedElement, merkle_tree_events_parser::IndexedBatchEvents};
+use super::{indexer_events::{RawIndexedElement, BatchPublicTransactionEvent}, merkle_tree_events_parser::IndexedBatchEvents};
 use crate::common::typedefs::account::AccountWithContext;
 use crate::common::typedefs::hash::Hash;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -60,7 +60,7 @@ pub struct IndexedTreeLeafUpdate {
     pub seq: u64,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 /// Representation of state update of the compression system that is optimal for simple persistence.
 pub struct StateUpdate {
     pub in_accounts: HashSet<Hash>,
@@ -71,6 +71,8 @@ pub struct StateUpdate {
     pub indexed_merkle_tree_updates: HashMap<(Pubkey, u64), IndexedTreeLeafUpdate>,
     pub batch_events: IndexedBatchEvents,
     pub input_context: Vec<BatchNullifyContext>,
+    /// Stored BatchPublicTransactionEvents for V2 transaction events
+    pub batch_transaction_events: Option<Vec<BatchPublicTransactionEvent>>,
 }
 
 impl StateUpdate {
@@ -110,6 +112,15 @@ impl StateUpdate {
                     existing_events.extend(events);
                 } else {
                     merged.batch_events.insert(key, events);
+                }
+            }
+
+            // Merge batch transaction events if present
+            if let Some(events) = update.batch_transaction_events {
+                if let Some(ref mut existing_events) = merged.batch_transaction_events {
+                    existing_events.extend(events);
+                } else {
+                    merged.batch_transaction_events = Some(events);
                 }
             }
         }
