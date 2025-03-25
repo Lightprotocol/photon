@@ -79,22 +79,12 @@ solana-program = "1.18.0"
 solana-sdk = "1.18.0"
 solana-transaction-status = "1.18.0"
 
-#light-merkle-tree-metadata = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-#] }
-light-concurrent-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-] }
-light-sdk = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-] }
-#light-compressed-account = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-#] }
-#light-batched-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-#] }
-light-prover-client = { git = "https://github.com/Lightprotocol/light-protocol", rev = "9d3cc26f06e31b614dc1393977925de9e99f37f5", features = [
-] }
-
-light-compressed-account = { path = "../light-protocol/program-libs/compressed-account" }
-light-merkle-tree-metadata = { path = "../light-protocol/program-libs/merkle-tree-metadata" }
-light-batched-merkle-tree = { path = "../light-protocol/program-libs/batched-merkle-tree" }
+light-merkle-tree-metadata = { git = "https://github.com/Lightprotocol/light-protocol", rev = "efda1395c1534b0bc35fb782b4f207319127c2b1", features = [] }
+light-concurrent-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "efda1395c1534b0bc35fb782b4f207319127c2b1", features = [] }
+light-sdk = { git = "https://github.com/Lightprotocol/light-protocol", rev = "efda1395c1534b0bc35fb782b4f207319127c2b1", features = [] }
+light-compressed-account = { git = "https://github.com/Lightprotocol/light-protocol", rev = "efda1395c1534b0bc35fb782b4f207319127c2b1", features = [] }
+light-batched-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "efda1395c1534b0bc35fb782b4f207319127c2b1", features = [] }
+light-prover-client = { git = "https://github.com/Lightprotocol/light-protocol", rev = "efda1395c1534b0bc35fb782b4f207319127c2b1", features = [] }
 
 sqlx = { version = "0.6.2", features = [
     "macros",
@@ -117,7 +107,7 @@ time = "0.3.36"
 tokio = { version = "1.43.0", features = ["full"] }
 tower = { version = "0.4.13", features = ["full"] }
 tower-http = { version = "0.3.5", features = ["full"] }
-tracing = "0.1.35"
+tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.16", features = [
     "json",
     "env-filter",
