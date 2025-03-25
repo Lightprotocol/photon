@@ -15,7 +15,9 @@ pub fn parse_public_transaction_event_v2(
     instructions: &[Vec<u8>],
     accounts: Vec<Vec<Pubkey>>,
 ) -> Option<Vec<BatchPublicTransactionEvent>> {
+    println!("parse_public_transaction_event_v2");
     let events = event_from_light_transaction(program_ids, instructions, accounts).ok()?;
+    println!("events: {:?}", events);
     events.map(|events| {
         events
             .into_iter()
@@ -53,7 +55,9 @@ pub fn parse_public_transaction_event_v2(
                         .sequence_numbers
                         .iter()
                         .map(|x| MerkleTreeSequenceNumber {
-                            pubkey: x.pubkey,
+                            tree_pubkey: x.tree_pubkey,
+                            queue_pubkey: x.queue_pubkey,
+                            tree_type: x.tree_type,
                             seq: x.seq,
                         })
                         .collect(),
@@ -72,7 +76,9 @@ pub fn parse_public_transaction_event_v2(
                         .input_sequence_numbers
                         .iter()
                         .map(|x| MerkleTreeSequenceNumber {
-                            pubkey: x.pubkey,
+                            tree_pubkey: x.tree_pubkey,
+                            queue_pubkey: x.queue_pubkey,
+                            tree_type: x.tree_type,
                             seq: x.seq,
                         })
                         .collect(),
@@ -80,7 +86,9 @@ pub fn parse_public_transaction_event_v2(
                         .address_sequence_numbers
                         .iter()
                         .map(|x| MerkleTreeSequenceNumber {
-                            pubkey: x.pubkey,
+                            tree_pubkey: x.tree_pubkey,
+                            queue_pubkey: x.queue_pubkey,
+                            tree_type: x.tree_type,
                             seq: x.seq,
                         })
                         .collect(),

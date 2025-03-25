@@ -11,7 +11,9 @@ pub struct OutputCompressedAccountWithPackedContext {
 
 #[derive(Debug, Clone, AnchorSerialize, AnchorDeserialize, Default, Eq, PartialEq)]
 pub struct MerkleTreeSequenceNumber {
-    pub pubkey: Pubkey,
+    pub tree_pubkey: Pubkey,
+    pub queue_pubkey: Pubkey,
+    pub tree_type: u64,
     pub seq: u64,
 }
 

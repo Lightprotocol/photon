@@ -1,8 +1,8 @@
 use lazy_static::lazy_static;
-use light_merkle_tree_metadata::merkle_tree::TreeType;
 use solana_program::pubkey;
 use solana_program::pubkey::Pubkey;
 use std::collections::HashMap;
+use light_compressed_account::TreeType;
 
 pub const DEFAULT_TREE_HEIGHT: u32 = 32 + 1;
 

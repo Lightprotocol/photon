@@ -6,10 +6,10 @@ use crate::ingester::parser::tree_info::TreeInfo;
 use crate::ingester::parser::{ACCOUNT_COMPRESSION_PROGRAM_ID, NOOP_PROGRAM_ID, SYSTEM_PROGRAM};
 use crate::ingester::typedefs::block_info::{Instruction, TransactionInfo};
 use anchor_lang::AnchorDeserialize;
-use light_merkle_tree_metadata::merkle_tree::TreeType;
 use log::info;
 use solana_sdk::signature::Signature;
 use std::collections::HashMap;
+use light_compressed_account::TreeType;
 
 pub fn parse_legacy_public_transaction_event(
     tx: &TransactionInfo,
@@ -63,7 +63,7 @@ pub fn parse_public_transaction_event(
     let mut tree_to_seq_number = HashMap::new();
 
     for seq in sequence_numbers.iter() {
-        if let Some(tree_info) = TreeInfo::get(&seq.pubkey.to_string()) {
+        if let Some(tree_info) = TreeInfo::get(&seq.tree_pubkey.to_string()) {
             if tree_info.tree_type == TreeType::BatchedState
                 || tree_info.tree_type == TreeType::BatchedAddress
             {
@@ -76,7 +76,7 @@ pub fn parse_public_transaction_event(
     if !has_batched_instructions {
         tree_to_seq_number = sequence_numbers
             .iter()
-            .map(|seq| (seq.pubkey, seq.seq))
+            .map(|seq| (seq.tree_pubkey, seq.seq))
             .collect::<HashMap<_, _>>();
     }
 
