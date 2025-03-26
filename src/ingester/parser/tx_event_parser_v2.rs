@@ -1,7 +1,8 @@
 use crate::ingester::error::IngesterError;
 use crate::ingester::parser::indexer_events::{
     BatchPublicTransactionEvent, CompressedAccount, CompressedAccountData,
-    MerkleTreeSequenceNumber, OutputCompressedAccountWithPackedContext, PublicTransactionEvent,
+    MerkleTreeSequenceNumberV2, OutputCompressedAccountWithPackedContext, PublicTransactionEvent,
+    PublicTransactionEventV2,
 };
 use crate::ingester::parser::state_update::StateUpdate;
 use crate::ingester::parser::tx_event_parser::parse_public_transaction_event;
@@ -15,14 +16,12 @@ pub fn parse_public_transaction_event_v2(
     instructions: &[Vec<u8>],
     accounts: Vec<Vec<Pubkey>>,
 ) -> Option<Vec<BatchPublicTransactionEvent>> {
-    println!("parse_public_transaction_event_v2");
     let events = event_from_light_transaction(program_ids, instructions, accounts).ok()?;
-    println!("events: {:?}", events);
     events.map(|events| {
         events
             .into_iter()
             .map(|public_transaction_event| {
-                let event = PublicTransactionEvent {
+                let event = PublicTransactionEventV2 {
                     input_compressed_account_hashes: public_transaction_event
                         .event
                         .input_compressed_account_hashes,
@@ -54,7 +53,7 @@ pub fn parse_public_transaction_event_v2(
                         .event
                         .sequence_numbers
                         .iter()
-                        .map(|x| MerkleTreeSequenceNumber {
+                        .map(|x| MerkleTreeSequenceNumberV2 {
                             tree_pubkey: x.tree_pubkey,
                             queue_pubkey: x.queue_pubkey,
                             tree_type: x.tree_type,
@@ -75,7 +74,7 @@ pub fn parse_public_transaction_event_v2(
                     input_sequence_numbers: public_transaction_event
                         .input_sequence_numbers
                         .iter()
-                        .map(|x| MerkleTreeSequenceNumber {
+                        .map(|x| MerkleTreeSequenceNumberV2 {
                             tree_pubkey: x.tree_pubkey,
                             queue_pubkey: x.queue_pubkey,
                             tree_type: x.tree_type,
@@ -85,7 +84,7 @@ pub fn parse_public_transaction_event_v2(
                     address_sequence_numbers: public_transaction_event
                         .address_sequence_numbers
                         .iter()
-                        .map(|x| MerkleTreeSequenceNumber {
+                        .map(|x| MerkleTreeSequenceNumberV2 {
                             tree_pubkey: x.tree_pubkey,
                             queue_pubkey: x.queue_pubkey,
                             tree_type: x.tree_type,
@@ -111,7 +110,11 @@ pub fn create_state_update(
     }
     let mut state_updates = Vec::new();
     for event in transaction_event.iter() {
-        let mut state_update_event = parse_public_transaction_event(tx, slot, event.event.clone())?;
+        let mut state_update_event = parse_public_transaction_event(
+            tx,
+            slot,
+            PublicTransactionEvent::V2(event.event.clone()),
+        )?;
         state_update_event
             .input_context
             .extend(event.batch_input_accounts.clone());

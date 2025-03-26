@@ -1,8 +1,8 @@
 use crate::utils::*;
 use borsh::BorshSerialize;
 use function_name::named;
+use light_compressed_account::QueueType;
 use light_hasher::zero_bytes::poseidon::ZERO_BYTES;
-use light_merkle_tree_metadata::queue::QueueType;
 use photon_indexer::api::method::get_compressed_accounts_by_owner::GetCompressedAccountsByOwnerRequest;
 use photon_indexer::api::method::get_compressed_token_balances_by_owner::{
     GetCompressedTokenBalancesByOwnerRequest, TokenBalance,

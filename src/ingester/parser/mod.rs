@@ -1,4 +1,3 @@
-use log::info;
 use merkle_tree_events_parser::parse_merkle_tree_event;
 use solana_sdk::pubkey::Pubkey;
 use tx_event_parser::parse_legacy_public_transaction_event;
@@ -43,12 +42,7 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
             program_ids.push(inner_instruction.program_id);
         });
 
-
-        info!("trying to parse public transaction event v2");
-        let res = parse_public_transaction_event_v2(&program_ids, &vec_instructions_data, vec_accounts);
-        println!("res: {:?}", res);
-        if let Some(event) = res
-        {
+        if let Some(event) = parse_public_transaction_event_v2(&program_ids, &vec_instructions_data, vec_accounts) {
             let state_update = create_state_update(tx.signature, slot, event)?;
             is_compression_transaction = true;
             state_updates.push(state_update);
