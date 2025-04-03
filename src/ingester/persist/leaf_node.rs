@@ -4,7 +4,7 @@ use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::dao::generated::state_trees;
 use crate::ingester::error::IngesterError;
 use crate::ingester::parser::state_update::LeafNullification;
-use crate::ingester::parser::tree_info::{TreeInfo, DEFAULT_TREE_HEIGHT};
+use crate::ingester::parser::tree_info::DEFAULT_TREE_HEIGHT;
 use crate::ingester::persist::persisted_state_tree::{get_proof_nodes, ZERO_BYTES};
 use crate::ingester::persist::{compute_parent_hash, get_node_direct_ancestors};
 use crate::migration::OnConflict;
@@ -75,17 +75,30 @@ pub async fn persist_leaf_nodes(
 
     leaf_nodes.sort_by_key(|node| node.seq);
 
-    let leaf_locations = leaf_nodes
-        .iter()
-        .map(|node| {
-            (
-                node.tree.to_bytes_vec(),
-                node.node_index(
-                    TreeInfo::height(&node.tree.0.to_string()).unwrap_or(DEFAULT_TREE_HEIGHT), // TODO: Handle error
-                ),
-            )
-        })
-        .collect::<Vec<_>>();
+    // Get tree heights from database for each unique tree
+    let mut tree_heights = HashMap::new();
+    for node in &leaf_nodes {
+        if !tree_heights.contains_key(&node.tree) {
+            match crate::ingester::parser::tree_info::TreeInfoService::get_tree_height(txn, &node.tree.to_string()).await {
+                Ok(Some(height)) => {
+                    tree_heights.insert(node.tree.clone(), height);
+                }
+                _ => {
+                    // Fallback to default if not found in database
+                    tree_heights.insert(node.tree.clone(), DEFAULT_TREE_HEIGHT);
+                }
+            }
+        }
+    }
+
+    let mut leaf_locations = Vec::with_capacity(leaf_nodes.len());
+    for node in &leaf_nodes {
+        let tree_height = *tree_heights.get(&node.tree).unwrap_or(&DEFAULT_TREE_HEIGHT);
+        leaf_locations.push((
+            node.tree.to_bytes_vec(),
+            node.node_index(tree_height),
+        ));
+    }
 
     let node_locations_to_models = get_proof_nodes(txn, leaf_locations, true, false).await?;
     let mut node_locations_to_hashes_and_seq = node_locations_to_models
@@ -96,9 +109,8 @@ pub async fn persist_leaf_nodes(
     let mut models_to_updates = HashMap::new();
 
     for leaf_node in leaf_nodes.clone() {
-        let node_idx = leaf_node.node_index(
-            TreeInfo::height(&leaf_node.tree.0.to_string()).unwrap_or(DEFAULT_TREE_HEIGHT),
-        ); // TODO: handle error
+        let tree_height = *tree_heights.get(&leaf_node.tree).unwrap_or(&DEFAULT_TREE_HEIGHT);
+        let node_idx = leaf_node.node_index(tree_height);
         let tree = leaf_node.tree;
         let key = (tree.to_bytes_vec(), node_idx);
 
@@ -127,22 +139,24 @@ pub async fn persist_leaf_nodes(
         }
     }
 
-    let all_ancestors = leaf_nodes
-        .iter()
-        .flat_map(|leaf_node| {
-            get_node_direct_ancestors(leaf_node.node_index(
-                TreeInfo::height(&leaf_node.tree.0.to_string()).unwrap_or(DEFAULT_TREE_HEIGHT),
-            )) // TODO: handle error
+    let mut all_ancestors = Vec::new();
+    for leaf_node in &leaf_nodes {
+        let tree_height = *tree_heights.get(&leaf_node.tree).unwrap_or(&DEFAULT_TREE_HEIGHT);
+        let ancestors = get_node_direct_ancestors(leaf_node.node_index(tree_height))
             .iter()
             .enumerate()
             .map(move |(i, &idx)| (leaf_node.tree.to_bytes_vec(), idx, i))
-            .collect::<Vec<(Vec<u8>, i64, usize)>>()
-        })
+            .collect::<Vec<(Vec<u8>, i64, usize)>>();
+        all_ancestors.extend(ancestors);
+    }
+    
+    all_ancestors = all_ancestors
+        .into_iter()
         .sorted_by(|a, b| {
             // Need to sort elements before dedup
             a.0.cmp(&b.0) // Sort by tree
                 .then_with(|| a.1.cmp(&b.1)) // Then by node index
-        }) // Need to sort elements before dedup
+        })
         .dedup()
         .collect::<Vec<(Vec<u8>, i64, usize)>>();
 

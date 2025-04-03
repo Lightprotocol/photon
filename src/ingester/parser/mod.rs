@@ -23,7 +23,7 @@ const SYSTEM_PROGRAM: Pubkey = pubkey!("11111111111111111111111111111111");
 const NOOP_PROGRAM_ID: Pubkey = pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
 const VOTE_PROGRAM_ID: Pubkey = pubkey!("Vote111111111111111111111111111111111111111");
 
-pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate, IngesterError> {
+pub async fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate, IngesterError> {
     let mut state_updates = Vec::new();
     let mut is_compression_transaction = false;
 
@@ -42,22 +42,22 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
             program_ids.push(inner_instruction.program_id);
         });
 
-        if let Some(event) =
-            parse_public_transaction_event_v2(&program_ids, &vec_instructions_data, vec_accounts)
-        {
-            let state_update = create_state_update(tx.signature, slot, event)?;
+        if let Some(event) = parse_public_transaction_event_v2(&program_ids, &vec_instructions_data, vec_accounts) {
+            println!("Parsing parse_public_transaction_event_v2 event");
+            let state_update = create_state_update(tx.signature, slot, event).await?;
             is_compression_transaction = true;
             state_updates.push(state_update);
         } else {
             for (index, _) in ordered_instructions.iter().enumerate() {
                 if ordered_instructions.len() - index > 2 {
+                    println!("Parsing parse_legacy_public_transaction_event)");
                     if let Some(state_update) = parse_legacy_public_transaction_event(
                         tx,
                         slot,
                         &ordered_instructions[index],
                         &ordered_instructions[index + 1],
                         &ordered_instructions[index + 2],
-                    )? {
+                    ).await? {
                         is_compression_transaction = true;
                         state_updates.push(state_update);
                     }

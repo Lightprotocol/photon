@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 use sea_orm::{ConnectionTrait, DbErr, EntityTrait, Statement, TransactionTrait, Value};
-use solana_program::pubkey::Pubkey;
 
-use crate::ingester::parser::tree_info::{TreeInfo, DEFAULT_TREE_HEIGHT};
+use crate::ingester::parser::tree_info::DEFAULT_TREE_HEIGHT;
 use crate::{
     common::typedefs::serializable_pubkey::SerializablePubkey, dao::generated::state_trees,
 };
@@ -104,9 +103,8 @@ where
                     index
                 );
 
-                let tree_pubkey = Pubkey::try_from(tree.clone()).unwrap();
-                let tree_height =
-                    TreeInfo::height(&tree_pubkey.to_string()).unwrap_or(DEFAULT_TREE_HEIGHT); // TODO: handle error
+                // Since we don't have a connection here, use the default height directly
+                let tree_height = DEFAULT_TREE_HEIGHT;
                 let model = state_trees::Model {
                     tree: tree.clone(),
                     level: get_level_by_node_index(*index, tree_height),

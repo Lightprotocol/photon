@@ -1,4 +1,5 @@
 use super::{error, parser::state_update::AccountTransaction};
+use crate::ingester::parser::indexer_events::{BatchPublicTransactionEvent, MerkleTreeEvent};
 use crate::ingester::parser::state_update::StateUpdate;
 use crate::{
     api::method::utils::PAGE_LIMIT,
@@ -55,6 +56,36 @@ pub const COMPRESSED_TOKEN_PROGRAM: Pubkey = pubkey!("cTokenmWW8bLPjZEBAUgYy3zKx
 // To avoid exceeding the 64k total parameter limit
 pub const MAX_SQL_INSERTS: usize = 500;
 
+// Helper function to extract BatchPublicTransactionEvent from StateUpdate
+fn batch_events_to_transaction_events(state_update: &StateUpdate) -> Vec<BatchPublicTransactionEvent> {
+    let mut result = Vec::new();
+    
+    // Extract batch events from the state update's batch_events field
+    for (tree_pubkey, events) in &state_update.batch_events {
+        for event in events {
+            if let (_, MerkleTreeEvent::BatchAppend(batch_event)) |
+                   (_, MerkleTreeEvent::BatchNullify(batch_event)) |
+                   (_, MerkleTreeEvent::BatchAddressAppend(batch_event)) = event {
+                // Check if this batch event is already processed as a V2 transaction event
+                if let Some(tx_events) = state_update.batch_transaction_events.as_ref() {
+                    // Try to match the batch event to a stored transaction event
+                    for tx_event in tx_events {
+                        // Use merkle tree pubkey to match events
+                        let tree_pubkey_arr: [u8; 32] = tree_pubkey.clone();
+                        
+                        if batch_event.merkle_tree_pubkey == tree_pubkey_arr {
+                            // Found a match, add to our results
+                            result.push(tx_event.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    result
+}
+
 pub async fn persist_state_update(
     txn: &DatabaseTransaction,
     state_update: StateUpdate,
@@ -62,6 +93,17 @@ pub async fn persist_state_update(
     if state_update == StateUpdate::default() {
         return Ok(());
     }
+    
+    // Save tree info from transaction events to the database if available
+    let batch_transaction_events: Vec<BatchPublicTransactionEvent> = batch_events_to_transaction_events(&state_update);
+    if !batch_transaction_events.is_empty() {
+        // Process tree metadata as part of this transaction
+        if let Err(e) = crate::ingester::parser::tx_event_parser_v2::process_tree_metadata_from_v2_events(txn, &batch_transaction_events).await {
+            // Log warning but continue with other operations
+            log::warn!("Failed to process tree metadata: {}", e);
+        }
+    }
+
     let StateUpdate {
         in_accounts,
         out_accounts,

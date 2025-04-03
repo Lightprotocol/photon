@@ -89,9 +89,8 @@ pub async fn get_validity_proof_v2(
         if request.hashes.is_empty() && request.newAddressesWithTrees.is_empty() {
             GetValidityProofResponseV2::default()
         } else {
-            get_validity_proof(conn, prover_url, request.into())
-                .await?
-                .into()
+            let v1_response = get_validity_proof(conn, prover_url, request.into()).await?;
+            GetValidityProofResponseV2::from_v1_async(conn, v1_response).await
         };
 
     // Add data of skipped accounts.

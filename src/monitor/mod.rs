@@ -32,6 +32,7 @@ use crate::common::typedefs::context::Context;
 use light_batched_merkle_tree::merkle_tree::BatchedMerkleTreeAccount;
 use solana_sdk::pubkey::Pubkey;
 use std::mem;
+use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 
 const CHUNK_SIZE: usize = 100;
 
@@ -75,8 +76,8 @@ pub fn continously_monitor_photon(
                     error!("Indexing lag is too high: {}", lag);
                 }
             } else {
-                let tree_roots = load_db_tree_roots_with_infinite_retry(db.as_ref()).await;
-                validate_tree_roots(rpc_client.as_ref(), tree_roots).await;
+                // let tree_roots = load_db_tree_roots_with_infinite_retry(db.as_ref()).await;
+                // validate_tree_roots(rpc_client.as_ref(), tree_roots).await;
             }
             sleep(Duration::from_millis(5000)).await;
         }
@@ -102,28 +103,33 @@ pub async fn start_latest_slot_updater(rpc_client: Arc<RpcClient>) {
     });
 }
 
-fn parse_historical_roots(account: SolanaAccount) -> Vec<Hash> {
+fn parse_historical_roots(account: SolanaAccount, tree_pubkey: &Pubkey) -> Vec<Hash> {
+    println!("Parsing historical roots for {:?}", SerializablePubkey::from(tree_pubkey.to_bytes()).to_string());
     let mut data = account.data.clone();
-    let pubkey = light_compressed_account::pubkey::Pubkey::new_from_array(account.owner.to_bytes());
+    let pubkey = light_compressed_account::pubkey::Pubkey::new_from_array(tree_pubkey.to_bytes());
 
     fn extract_roots(root_history: &[[u8; 32]]) -> Vec<Hash> {
         root_history.iter().map(|&root| Hash::from(root)).collect()
     }
 
     if let Ok(merkle_tree) = BatchedMerkleTreeAccount::address_from_bytes(&mut data, &pubkey) {
+        println!("Found batched address merkle tree account");
         return extract_roots(merkle_tree.root_history.as_slice());
     }
 
     if let Ok(merkle_tree) = BatchedMerkleTreeAccount::state_from_bytes(&mut data, &pubkey) {
+        println!("Found batched state merkle tree account");
         return extract_roots(merkle_tree.root_history.as_slice());
     }
 
+    println!("Parsing legacy tree");
     // fallback: legacy tree
     let concurrent_tree = ConcurrentMerkleTreeCopy::<Poseidon, 26>::from_bytes_copy(
         &account.data[8 + mem::size_of::<MerkleTreeMetadata>()..],
     )
     .unwrap();
 
+    println!("Extracting roots from legacy tree");
     extract_roots(concurrent_tree.roots.as_slice())
 }
 
@@ -138,8 +144,10 @@ async fn load_db_tree_roots_with_infinite_retry(db: &DatabaseConnection) -> Vec<
                 return models
                     .iter()
                     .map(|model| {
+                        let tree_pubkey = Pubkey::try_from(model.tree.clone()).unwrap();
+                        println!("Loading tree root for {:?}", tree_pubkey.to_string());
                         (
-                            Pubkey::try_from(model.tree.clone()).unwrap(),
+                            tree_pubkey,
                             Hash::try_from(model.hash.clone()).unwrap(),
                         )
                     })
@@ -191,7 +199,7 @@ async fn validate_tree_roots(rpc_client: &RpcClient, db_roots: Vec<(Pubkey, Hash
         let pubkeys = chunk.iter().map(|(pubkey, _)| *pubkey).collect();
         let accounts = load_accounts_with_infinite_retry(rpc_client, pubkeys).await;
         for ((pubkey, db_hash), account) in chunk.iter().zip(accounts) {
-            let account_roots = parse_historical_roots(account);
+            let account_roots = parse_historical_roots(account, pubkey);
             if !account_roots.contains(db_hash) {
                 log::error!(
                     "Root mismatch for pubkey {:?}. db_hash: {}, account_roots: {:?}",

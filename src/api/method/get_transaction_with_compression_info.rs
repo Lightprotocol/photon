@@ -211,6 +211,7 @@ pub async fn get_transaction_helper(
         })?,
         slot,
     )
+    .await
     .map_err(|_e| {
         PhotonApiError::UnexpectedError(format!("Failed to parse transaction {}", signature.0))
     })?;
@@ -361,10 +362,11 @@ pub async fn get_transaction_helper_v2(
         })?,
         slot,
     )
+    .await
     .map_err(|_e| {
         PhotonApiError::UnexpectedError(format!("Failed to parse transaction {}", signature.0))
     })?;
-
+    
     let closed_accounts = fetch_accounts_from_hashes(
         conn,
         status_update.in_accounts.iter().cloned().collect(),

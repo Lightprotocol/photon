@@ -47,7 +47,7 @@ use std::collections::{HashMap, HashSet};
 use photon_indexer::common::typedefs::token_data::{AccountState, TokenData};
 use sqlx::types::Decimal;
 
-use light_merkle_tree_metadata::merkle_tree::TreeType;
+use light_compressed_account::TreeType;
 use photon_indexer::common::typedefs::limit::Limit;
 use sea_orm::ColumnTrait;
 use solana_sdk::pubkey::Pubkey;
