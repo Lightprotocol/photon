@@ -80,13 +80,13 @@ pub async fn get_multiple_new_address_proofs_helper(
             })?
             .clone();
         let (model, proof) = match tree_and_queue.tree_type {
-            TreeType::Address => {
+            TreeType::AddressV1 => {
                 let address = address.to_bytes_vec();
                 let tree = tree.to_bytes_vec();
                 get_exclusion_range_with_proof_legacy(txn, tree, tree_and_queue.height + 1, address)
                     .await?
             }
-            TreeType::BatchedAddress => {
+            TreeType::AddressV2 => {
                 get_exclusion_range_with_proof(
                     txn,
                     tree.to_bytes_vec(),

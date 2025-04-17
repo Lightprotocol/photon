@@ -70,7 +70,7 @@ pub fn create_state_update_v1(
             .clone();
 
         let mut seq = None;
-        if tree_and_queue.tree_type == TreeType::State {
+        if tree_and_queue.tree_type == TreeType::StateV1 {
             seq = Some(*tree_to_seq_number.get(&tree).ok_or_else(|| {
                 IngesterError::ParserError("Missing sequence number".to_string())
             })?);
@@ -81,7 +81,7 @@ pub fn create_state_update_v1(
             *seq += 1;
         }
 
-        let in_output_queue = tree_and_queue.tree_type == TreeType::BatchedState;
+        let in_output_queue = tree_and_queue.tree_type == TreeType::StateV2;
         let enriched_account = AccountWithContext::new(
             out_account.compressed_account.clone(),
             &hash,
