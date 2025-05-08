@@ -25,5 +25,6 @@ pub mod get_transaction_with_compression_info;
 pub mod get_validity_proof;
 
 pub mod get_batch_address_update_info;
+pub mod get_queue_tree_mapping;
 
 pub mod utils;
