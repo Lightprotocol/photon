@@ -49,11 +49,26 @@ pub struct GetMultipleNewAddressProofsResponse {
     pub value: Vec<MerkleContextWithNewAddressProof>,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AddressInQueueInfo {
+    pub address: SerializablePubkey,
+    pub tree: SerializablePubkey,
+    pub queue_index: u64,
+    pub tree_type: u16,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum AddressProof {
+    NonInclusion(MerkleContextWithNewAddressProof),
+    InQueue(AddressInQueueInfo),
+}
+
 pub async fn get_multiple_new_address_proofs_helper(
     txn: &DatabaseTransaction,
     addresses: Vec<AddressWithTree>,
     check_queue: bool,
-) -> Result<Vec<MerkleContextWithNewAddressProof>, PhotonApiError> {
+) -> Result<Vec<AddressProof>, PhotonApiError> {
     if addresses.is_empty() {
         return Err(PhotonApiError::ValidationError(
             "No addresses provided".to_string(),
@@ -71,63 +86,63 @@ pub async fn get_multiple_new_address_proofs_helper(
         ));
     }
 
-    let mut new_address_proofs: Vec<MerkleContextWithNewAddressProof> = Vec::new();
+    let mut results: Vec<AddressProof> = Vec::new();
 
     for AddressWithTree { address, tree } in addresses {
-        let tree_and_queue = TreeInfo::get(&tree.to_string())
+        let tree_and_queue_info = TreeInfo::get(&tree.to_string())
             .ok_or(PhotonApiError::InvalidPubkey {
                 field: tree.to_string(),
             })?
             .clone();
 
         // For V2 trees, check if the address is in the queue but not yet in the tree
-        if check_queue && tree_and_queue.tree_type == TreeType::AddressV2 {
-            // Check if the address is in the queue
+        if check_queue && tree_and_queue_info.tree_type == TreeType::AddressV2 {
             let address_queue_stmt = Statement::from_string(
                 txn.get_database_backend(),
                 format!(
-                    "SELECT COUNT(*) as count FROM address_queues
-                     WHERE tree = {} AND address = {}",
+                    "SELECT queue_index FROM address_queues
+                     WHERE tree = {} AND address = {}
+                     LIMIT 1",
                     format_bytes(tree.to_bytes_vec(), txn.get_database_backend()),
                     format_bytes(address.to_bytes_vec(), txn.get_database_backend())
                 ),
             );
 
-            let queue_result = txn.query_one(address_queue_stmt).await.map_err(|e| {
+            let queue_result_row = txn.query_one(address_queue_stmt).await.map_err(|e| {
                 PhotonApiError::UnexpectedError(format!("Failed to query address queue: {}", e))
             })?;
 
-            let in_queue = match queue_result {
-                Some(row) => {
-                    let count: i64 = row.try_get("", "count").map_err(|e| {
-                        PhotonApiError::UnexpectedError(format!("Failed to get count: {}", e))
-                    })?;
-                    count > 0
-                }
-                None => false,
-            };
-
-            if in_queue {
-                return Err(PhotonApiError::ValidationError(format!(
-                    "Address {} is in the queue for tree {} but not yet in the tree",
-                    address.to_string(),
-                    tree.to_string()
-                )));
+            if let Some(row) = queue_result_row {
+                let queue_idx: i64 = row.try_get("", "queue_index").map_err(|e| {
+                    PhotonApiError::UnexpectedError(format!("Failed to get queue_index: {}", e))
+                })?;
+                results.push(AddressProof::InQueue(AddressInQueueInfo {
+                    address,
+                    tree,
+                    queue_index: queue_idx as u64,
+                    tree_type: tree_and_queue_info.tree_type as u16,
+                }));
+                continue;
             }
         }
 
-        let (model, proof) = match tree_and_queue.tree_type {
+        let (model, proof) = match tree_and_queue_info.tree_type {
             TreeType::AddressV1 => {
                 let address = address.to_bytes_vec();
                 let tree = tree.to_bytes_vec();
-                get_exclusion_range_with_proof_v1(txn, tree, tree_and_queue.height + 1, address)
-                    .await?
+                get_exclusion_range_with_proof_v1(
+                    txn,
+                    tree,
+                    tree_and_queue_info.height + 1,
+                    address,
+                )
+                .await?
             }
             TreeType::AddressV2 => {
                 get_exclusion_range_with_proof_v2(
                     txn,
                     tree.to_bytes_vec(),
-                    tree_and_queue.height + 1,
+                    tree_and_queue_info.height + 1,
                     address.to_bytes_vec(),
                 )
                 .await?
@@ -139,7 +154,7 @@ pub async fn get_multiple_new_address_proofs_helper(
             }
         };
 
-        let new_address_proof = MerkleContextWithNewAddressProof {
+        let non_inclusion_proof = MerkleContextWithNewAddressProof {
             root: proof.root,
             address,
             lowerRangeAddress: SerializablePubkey::try_from(model.value)?,
@@ -150,9 +165,9 @@ pub async fn get_multiple_new_address_proofs_helper(
             merkleTree: tree,
             rootSeq: proof.root_seq,
         };
-        new_address_proofs.push(new_address_proof);
+        results.push(AddressProof::NonInclusion(non_inclusion_proof));
     }
-    Ok(new_address_proofs)
+    Ok(results)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -194,12 +209,30 @@ pub async fn get_multiple_new_address_proofs_v2(
         .await?;
     }
 
-    let new_address_proofs =
+    let address_proofs =
         get_multiple_new_address_proofs_helper(&tx, addresses_with_trees.0, true).await?;
     tx.commit().await?;
 
+    let mut non_inclusion_proofs: Vec<MerkleContextWithNewAddressProof> = Vec::new();
+    for result in address_proofs {
+        match result {
+            AddressProof::NonInclusion(proof) => {
+                non_inclusion_proofs.push(proof);
+            }
+            AddressProof::InQueue(info) => {
+                // If an address is found in the queue, it's not "new" in that sense
+                // and cannot have a non-inclusion proof from the tree yet.
+                return Err(PhotonApiError::ValidationError(format!(
+                    "Address {} in tree {} is currently in the processing queue and a non-inclusion proof from the tree cannot be generated at this time.",
+                    info.address.to_string(),
+                    info.tree.to_string()
+                )));
+            }
+        }
+    }
+
     Ok(GetMultipleNewAddressProofsResponse {
-        value: new_address_proofs,
+        value: non_inclusion_proofs,
         context,
     })
 }

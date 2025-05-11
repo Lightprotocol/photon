@@ -4,7 +4,8 @@ use utoipa::ToSchema;
 
 use crate::api::error::PhotonApiError;
 use crate::api::method::get_multiple_new_address_proofs::{
-    get_multiple_new_address_proofs_helper, AddressWithTree, MerkleContextWithNewAddressProof,
+    get_multiple_new_address_proofs_helper, AddressProof, AddressWithTree,
+    MerkleContextWithNewAddressProof,
 };
 use crate::common::typedefs::context::Context;
 use crate::common::typedefs::hash::Hash;
@@ -141,8 +142,28 @@ pub async fn get_batch_address_update_info(
     }
 
     // 4. Get non-inclusion proofs for each address.
-    let non_inclusion_proofs =
+    let address_proofs =
         get_multiple_new_address_proofs_helper(&tx, addresses_with_trees, false).await?;
+
+    let mut non_inclusion_proofs: Vec<MerkleContextWithNewAddressProof> = Vec::new();
+    for proof_type in address_proofs {
+        match proof_type {
+            AddressProof::NonInclusion(proof) => {
+                non_inclusion_proofs.push(proof);
+            }
+            AddressProof::InQueue(_) => {
+                // This case should not be reached if check_queue is false.
+                // If it is, it indicates an unexpected state or logic error in the helper.
+                tx.rollback().await.map_err(|_| {
+                    PhotonApiError::UnexpectedError("Failed to rollback transaction".to_string())
+                })?;
+                return Err(PhotonApiError::UnexpectedError(
+                    "Received InQueue status from helper when check_queue was false.".to_string(),
+                ));
+            }
+        }
+    }
+
     let subtrees = get_subtrees(&tx, merkle_tree, tree_info.height as usize).await?;
 
     Ok(GetBatchAddressUpdateInfoResponse {

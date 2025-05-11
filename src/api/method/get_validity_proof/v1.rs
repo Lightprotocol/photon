@@ -1,5 +1,6 @@
 use crate::api::method::get_multiple_new_address_proofs::{
-    get_multiple_new_address_proofs_helper, AddressWithTree, ADDRESS_TREE_V1,
+    get_multiple_new_address_proofs_helper, AddressProof, AddressWithTree,
+    MerkleContextWithNewAddressProof, ADDRESS_TREE_V1,
 };
 use crate::api::method::get_validity_proof::prover::prove::generate_proof;
 use crate::api::method::get_validity_proof::CompressedProof;
@@ -100,12 +101,34 @@ pub async fn get_validity_proof(
         Vec::new()
     };
 
-    let db_new_address_proofs = if !request.new_addresses_with_trees.is_empty() {
-        get_multiple_new_address_proofs_helper(&tx, request.new_addresses_with_trees.clone(), true)
-            .await?
-    } else {
-        Vec::new()
-    };
+    let mut db_new_address_proofs: Vec<MerkleContextWithNewAddressProof> = Vec::new();
+    if !request.new_addresses_with_trees.is_empty() {
+        let address_proof_helper_results = get_multiple_new_address_proofs_helper(
+            &tx,
+            request.new_addresses_with_trees.clone(),
+            true,
+        )
+        .await?;
+
+        for result in address_proof_helper_results {
+            match result {
+                AddressProof::NonInclusion(proof) => {
+                    db_new_address_proofs.push(proof);
+                }
+                AddressProof::InQueue(info) => {
+                    // For V1, finding an address in the queue when expecting a non-inclusion proof is an error.
+                    // We must commit or rollback before returning PhotonApiError that isn't DatabaseError
+                    tx.commit().await?;
+                    return Err(PhotonApiError::ValidationError(format!(
+                        "Address {} in tree {} is currently in the processing queue. V1 proof expects addresses ready for non-inclusion proof from the tree.",
+                        info.address.to_string(),
+                        info.tree.to_string()
+                    )));
+                }
+            }
+        }
+    }
+
     tx.commit().await?;
 
     if db_account_proofs.is_empty() && db_new_address_proofs.is_empty() {
