@@ -81,6 +81,9 @@ use crate::api::method::get_multiple_compressed_account_proofs::{
 use crate::api::method::get_queue_elements::{
     get_queue_elements, GetQueueElementsRequest, GetQueueElementsResponse,
 };
+use crate::api::method::get_queue_tree_mapping::{
+    get_queue_tree_mapping, QueueTreeMappingResponse,
+};
 use crate::api::method::get_validity_proof::{
     get_validity_proof, get_validity_proof_v2, GetValidityProofRequest,
     GetValidityProofRequestDocumentation, GetValidityProofRequestV2, GetValidityProofResponse,
@@ -388,6 +391,10 @@ impl PhotonApi {
         get_batch_address_update_info(self.db_conn.as_ref(), request).await
     }
 
+    pub async fn get_queue_tree_mapping(&self) -> Result<QueueTreeMappingResponse, PhotonApiError> {
+        Ok(get_queue_tree_mapping().await)
+    }
+
     pub fn method_api_specs() -> Vec<OpenApiSpec> {
         vec![
             OpenApiSpec {
@@ -576,6 +583,11 @@ impl PhotonApi {
                 name: "getIndexerSlot".to_string(),
                 request: None,
                 response: UnsignedInteger::schema().1,
+            },
+            OpenApiSpec {
+                name: "getQueueTreeMapping".to_string(),
+                request: None,
+                response: QueueTreeMappingResponse::schema().1,
             },
         ]
     }
