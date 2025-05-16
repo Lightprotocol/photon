@@ -35,7 +35,7 @@ pub(crate) struct ProverResult {
     pub address_proof_details: Vec<AddressProofDetail>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct InclusionHexInputsForProver {
     pub root: String,
@@ -44,7 +44,7 @@ pub(crate) struct InclusionHexInputsForProver {
     pub leaf: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NonInclusionHexInputsForProver {
     pub root: String,
@@ -77,7 +77,7 @@ pub struct CompressedProof {
     pub c: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct HexBatchInputsForProver {
     #[serde(rename = "circuitType")]
