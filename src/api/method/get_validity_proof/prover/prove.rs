@@ -11,13 +11,11 @@ use crate::api::method::get_validity_proof::prover::structs::{
 };
 use crate::common::typedefs::hash::Hash;
 use crate::ingester::parser::tree_info::TreeInfo;
-use crate::ingester::persist::MerkleProofWithContext;
+use crate::ingester::persist::{MerkleProofWithContext, TREE_HEIGHT_V1};
 use light_batched_merkle_tree::constants::{
     DEFAULT_BATCH_ADDRESS_TREE_HEIGHT, DEFAULT_BATCH_STATE_TREE_HEIGHT,
 };
 use light_batched_merkle_tree::merkle_tree_metadata::BatchedMerkleTreeMetadata;
-use light_sdk::STATE_MERKLE_TREE_HEIGHT;
-
 use reqwest::Client;
 
 const STATE_TREE_QUEUE_SIZE: u64 = 2400;
@@ -87,7 +85,7 @@ pub(crate) async fn generate_proof(
     } else {
         address_tree_height
     };
-    let queue_size = if queue_determining_height == STATE_MERKLE_TREE_HEIGHT {
+    let queue_size = if queue_determining_height == TREE_HEIGHT_V1 as usize {
         STATE_TREE_QUEUE_SIZE
     } else if queue_determining_height == 0 {
         // No proofs, default for batched (should ideally not hit if circuit_type is determined)
