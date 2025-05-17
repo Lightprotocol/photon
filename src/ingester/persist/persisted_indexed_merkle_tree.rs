@@ -163,7 +163,7 @@ pub async fn get_exclusion_range_with_proof_v2(
             merkle_tree: SerializablePubkey::try_from(tree.clone()).map_err(|e| {
                 PhotonApiError::UnexpectedError(format!("Failed to serialize pubkey: {}", e))
             })?,
-            root_seq: 3,
+            root_seq: if TREE_HEIGHT_V1 == tree_height { 3 } else { 0 },
         };
         merkle_proof.validate()?;
         return Ok((zeroeth_element, merkle_proof));
