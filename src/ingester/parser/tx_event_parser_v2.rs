@@ -1,6 +1,10 @@
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::ingester::error::IngesterError;
-use crate::ingester::parser::indexer_events::{BatchPublicTransactionEvent, CompressedAccount, CompressedAccountData, MerkleTreeSequenceNumberV1, MerkleTreeSequenceNumberV2, OutputCompressedAccountWithPackedContext, PublicTransactionEvent};
+use crate::ingester::parser::indexer_events::{
+    BatchPublicTransactionEvent, CompressedAccount, CompressedAccountData,
+    MerkleTreeSequenceNumberV1, MerkleTreeSequenceNumberV2,
+    OutputCompressedAccountWithPackedContext, PublicTransactionEvent,
+};
 use crate::ingester::parser::state_update::StateUpdate;
 use crate::ingester::parser::tx_event_parser::create_state_update_v1;
 

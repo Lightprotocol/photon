@@ -60,7 +60,6 @@ pub struct PublicTransactionEvent {
     pub message: Option<Vec<u8>>,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct BatchPublicTransactionEvent {
     pub event: PublicTransactionEvent,

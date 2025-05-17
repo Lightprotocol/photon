@@ -1,6 +1,6 @@
 use crate::api::error::PhotonApiError;
 use crate::api::method::get_multiple_new_address_proofs::MerkleContextWithNewAddressProof;
-use crate::api::method::get_validity_proof::prover::gnark::negate_proof;
+use crate::api::method::get_validity_proof::prover::gnark::compress_proof;
 use crate::api::method::get_validity_proof::prover::helpers::{
     convert_inclusion_proofs_to_hex, convert_non_inclusion_merkle_proof_to_hex,
     get_public_input_hash, hash_to_hex, proof_from_json_struct,
@@ -71,7 +71,8 @@ pub(crate) async fn generate_proof(
     let is_v2_tree_height = (state_tree_height == DEFAULT_BATCH_STATE_TREE_HEIGHT as usize)
         || (address_tree_height == DEFAULT_BATCH_ADDRESS_TREE_HEIGHT as usize);
 
-    let public_input_hash_bytes = get_public_input_hash(&db_account_proofs, &db_new_address_proofs);
+    let public_input_hash_bytes =
+        get_public_input_hash(&db_account_proofs, &db_new_address_proofs)?;
     let public_input_hash_str = if is_v2_tree_height || circuit_type == CircuitType::Combined {
         hash_to_hex(&Hash(public_input_hash_bytes))
     } else {
@@ -138,9 +139,8 @@ pub(crate) async fn generate_proof(
         ))
     })?;
 
-    let proof_abc = proof_from_json_struct(proof_json);
-    let compressed_gnark_proof = negate_proof(proof_abc);
-
+    let proof = proof_from_json_struct(proof_json)?;
+    let compressed_proof = compress_proof(&proof)?;
     let mut account_details = Vec::with_capacity(db_account_proofs.len());
     for acc_proof in db_account_proofs.iter() {
         let tree_info = TreeInfo::get(&acc_proof.merkle_tree.to_string().as_str())
@@ -178,7 +178,7 @@ pub(crate) async fn generate_proof(
     }
 
     Ok(ProverResult {
-        compressed_proof: compressed_gnark_proof?,
+        compressed_proof,
         account_proof_details: account_details,
         address_proof_details: address_details,
     })
