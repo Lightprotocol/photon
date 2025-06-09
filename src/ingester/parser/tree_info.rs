@@ -247,6 +247,47 @@ lazy_static! {
                 tree_type: TreeType::AddressV2,
             },
         );
+        
+        // New test devnet deployment trees
+        m.insert(
+            "47XabVBHzJ1ZZ5fjvMsYfZasqjxGdc3kL1x7nRcPSePi".to_string(),
+            TreeInfo {
+                tree: pubkey!("47XabVBHzJ1ZZ5fjvMsYfZasqjxGdc3kL1x7nRcPSePi"),
+                queue: pubkey!("ArXpCNXx4kgp6qRgo6fMLbSC9oyyxogXew8YUaZpNbio"),
+                height: 32,
+                tree_type: TreeType::StateV2,
+            },
+        );
+
+        m.insert(
+            "ArXpCNXx4kgp6qRgo6fMLbSC9oyyxogXew8YUaZpNbio".to_string(),
+            TreeInfo {
+                tree: pubkey!("47XabVBHzJ1ZZ5fjvMsYfZasqjxGdc3kL1x7nRcPSePi"),
+                queue: pubkey!("ArXpCNXx4kgp6qRgo6fMLbSC9oyyxogXew8YUaZpNbio"),
+                height: 32,
+                tree_type: TreeType::StateV2,
+            },
+        );
+
+        m.insert(
+            "2Qnx8LEtnULJJW1mX4QC5uL9acEAGMDMvAQv8MLPMzqS".to_string(),
+            TreeInfo {
+                tree: pubkey!("2Qnx8LEtnULJJW1mX4QC5uL9acEAGMDMvAQv8MLPMzqS"),
+                queue: pubkey!("2Qnx8LEtnULJJW1mX4QC5uL9acEAGMDMvAQv8MLPMzqS"),
+                height: 32,
+                tree_type: TreeType::StateV2,
+            },
+        );
+
+        m.insert(
+            "DFp2gBJRVCFumMTCAWqX8dkQrzSiKn6AMKVDyppL5pbV".to_string(),
+            TreeInfo {
+                tree: pubkey!("DFp2gBJRVCFumMTCAWqX8dkQrzSiKn6AMKVDyppL5pbV"),
+                queue: pubkey!("DFp2gBJRVCFumMTCAWqX8dkQrzSiKn6AMKVDyppL5pbV"),
+                height: 40,
+                tree_type: TreeType::AddressV2,
+            },
+        );
 
         m
     };

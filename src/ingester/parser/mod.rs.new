@@ -42,7 +42,6 @@ pub fn get_light_registry_program_id() -> Pubkey {
     *LIGHT_REGISTRY_PROGRAM_ID
         .get_or_init(|| pubkey!("42pUw7FrXo7cdmoFdFqCmgsKFAuRhpVW52W1fNgJKiR7"))
 }
-
 pub fn set_compression_program_id(program_id_str: &str) -> Result<(), String> {
     match program_id_str.parse::<Pubkey>() {
         Ok(pubkey) => match ACCOUNT_COMPRESSION_PROGRAM_ID.set(pubkey) {
@@ -50,36 +49,6 @@ pub fn set_compression_program_id(program_id_str: &str) -> Result<(), String> {
             Err(_) => Err("Compression program ID has already been set".to_string()),
         },
         Err(err) => Err(format!("Invalid compression program ID: {}", err)),
-    }
-}
-
-pub fn set_light_compressed_token_program_id(program_id_str: &str) -> Result<(), String> {
-    match program_id_str.parse::<Pubkey>() {
-        Ok(pubkey) => match LIGHT_COMPRESSED_TOKEN_PROGRAM_ID.set(pubkey) {
-            Ok(_) => Ok(()),
-            Err(_) => Err("Light compressed token program ID has already been set".to_string()),
-        },
-        Err(err) => Err(format!("Invalid light compressed token program ID: {}", err)),
-    }
-}
-
-pub fn set_light_system_program_pinocchio_id(program_id_str: &str) -> Result<(), String> {
-    match program_id_str.parse::<Pubkey>() {
-        Ok(pubkey) => match LIGHT_SYSTEM_PROGRAM_PINOCCHIO_ID.set(pubkey) {
-            Ok(_) => Ok(()),
-            Err(_) => Err("Light system program pinocchio ID has already been set".to_string()),
-        },
-        Err(err) => Err(format!("Invalid light system program pinocchio ID: {}", err)),
-    }
-}
-
-pub fn set_light_registry_program_id(program_id_str: &str) -> Result<(), String> {
-    match program_id_str.parse::<Pubkey>() {
-        Ok(pubkey) => match LIGHT_REGISTRY_PROGRAM_ID.set(pubkey) {
-            Ok(_) => Ok(()),
-            Err(_) => Err("Light registry program ID has already been set".to_string()),
-        },
-        Err(err) => Err(format!("Invalid light registry program ID: {}", err)),
     }
 }
 
