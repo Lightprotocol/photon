@@ -91,8 +91,20 @@ struct Args {
     disable_api: bool,
 
     /// Custom account compression program ID (optional)
-    #[arg(long, default_value = "compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq")]
+    #[arg(long, default_value = "8bAVNbY2KtCsLZSGFRQ9s44p1sewzLz68q7DLFsBannh")]
     compression_program_id: String,
+
+    /// Light compressed token program ID (optional)
+    #[arg(long, default_value = "7ufxL4dJT6zsn9pQysqMm7GkYX8bf1cEQ1K6WHQtqojZ")]
+    light_compressed_token_program_id: String,
+
+    /// Light system program pinocchio ID (optional)
+    #[arg(long, default_value = "EpgpSRSHbohAPC5XixPCNsNeq8yHfNsj3XorUWk6hVMT")]
+    light_system_program_pinocchio_id: String,
+
+    /// Light registry program ID (optional)
+    #[arg(long, default_value = "42pUw7FrXo7cdmoFdFqCmgsKFAuRhpVW52W1fNgJKiR7")]
+    light_registry_program_id: String,
 
     /// Metrics endpoint in the format `host:port`
     /// If provided, metrics will be sent to the specified statsd server.
@@ -194,10 +206,32 @@ async fn main() {
     setup_logging(args.logging_format);
     setup_metrics(args.metrics_endpoint);
 
+    // Use the compression program ID from the command line arguments
     if let Err(err) =
         photon_indexer::ingester::parser::set_compression_program_id(&args.compression_program_id)
     {
         error!("Failed to set compression program ID: {}", err);
+        std::process::exit(1);
+    }
+
+    if let Err(err) =
+        photon_indexer::ingester::parser::set_light_compressed_token_program_id(&args.light_compressed_token_program_id)
+    {
+        error!("Failed to set light compressed token program ID: {}", err);
+        std::process::exit(1);
+    }
+
+    if let Err(err) =
+        photon_indexer::ingester::parser::set_light_system_program_pinocchio_id(&args.light_system_program_pinocchio_id)
+    {
+        error!("Failed to set light system program pinocchio ID: {}", err);
+        std::process::exit(1);
+    }
+
+    if let Err(err) =
+        photon_indexer::ingester::parser::set_light_registry_program_id(&args.light_registry_program_id)
+    {
+        error!("Failed to set light registry program ID: {}", err);
         std::process::exit(1);
     }
 
