@@ -28,13 +28,13 @@ pub fn get_compression_program_id() -> Pubkey {
 static LIGHT_COMPRESSED_TOKEN_PROGRAM_ID: OnceLock<Pubkey> = OnceLock::new();
 pub fn get_light_compressed_token_program_id() -> Pubkey {
     *LIGHT_COMPRESSED_TOKEN_PROGRAM_ID
-        .get_or_init(|| pubkey!("7ufxL4dJT6zsn9pQysqMm7GkYX8bf1cEQ1K6WHQtqojZ"))
+        .get_or_init(|| pubkey!("EpgpSRSHbohAPC5XixPCNsNeq8yHfNsj3XorUWk6hVMT"))
 }
 
 static LIGHT_SYSTEM_PROGRAM_PINOCCHIO_ID: OnceLock<Pubkey> = OnceLock::new();
 pub fn get_light_system_program_pinocchio_id() -> Pubkey {
     *LIGHT_SYSTEM_PROGRAM_PINOCCHIO_ID
-        .get_or_init(|| pubkey!("EpgpSRSHbohAPC5XixPCNsNeq8yHfNsj3XorUWk6hVMT"))
+        .get_or_init(|| pubkey!("7ufxL4dJT6zsn9pQysqMm7GkYX8bf1cEQ1K6WHQtqojZ"))
 }
 
 static LIGHT_REGISTRY_PROGRAM_ID: OnceLock<Pubkey> = OnceLock::new();
@@ -59,7 +59,10 @@ pub fn set_light_compressed_token_program_id(program_id_str: &str) -> Result<(),
             Ok(_) => Ok(()),
             Err(_) => Err("Light compressed token program ID has already been set".to_string()),
         },
-        Err(err) => Err(format!("Invalid light compressed token program ID: {}", err)),
+        Err(err) => Err(format!(
+            "Invalid light compressed token program ID: {}",
+            err
+        )),
     }
 }
 
@@ -69,7 +72,10 @@ pub fn set_light_system_program_pinocchio_id(program_id_str: &str) -> Result<(),
             Ok(_) => Ok(()),
             Err(_) => Err("Light system program pinocchio ID has already been set".to_string()),
         },
-        Err(err) => Err(format!("Invalid light system program pinocchio ID: {}", err)),
+        Err(err) => Err(format!(
+            "Invalid light system program pinocchio ID: {}",
+            err
+        )),
     }
 }
 

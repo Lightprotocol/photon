@@ -41,14 +41,19 @@ paths:
                   type: object
                   required:
                   - tree
-                  - batchSize
+                  - limit
                   properties:
-                    batchSize:
+                    limit:
                       type: integer
                       format: uint16
                       minimum: 0
+                    startQueueIndex:
+                      type: integer
+                      format: uint64
+                      nullable: true
+                      minimum: 0
                     tree:
-                      $ref: '#/components/schemas/Hash'
+                      $ref: '#/components/schemas/SerializablePubkey'
                   additionalProperties: false
         required: true
       responses:
@@ -91,7 +96,7 @@ paths:
                       addresses:
                         type: array
                         items:
-                          $ref: '#/components/schemas/AddressSeq'
+                          $ref: '#/components/schemas/AddressQueueIndex'
                       context:
                         $ref: '#/components/schemas/Context'
                       nonInclusionProofs:
@@ -3739,10 +3744,10 @@ paths:
                   type: object
                   required:
                   - tree
-                  - numElements
+                  - limit
                   - queueType
                   properties:
-                    numElements:
+                    limit:
                       type: integer
                       format: uint16
                       minimum: 0
@@ -3750,7 +3755,7 @@ paths:
                       type: integer
                       format: uint8
                       minimum: 0
-                    startOffset:
+                    startQueueIndex:
                       type: integer
                       format: uint64
                       nullable: true
@@ -4425,6 +4430,27 @@ components:
             allOf:
             - $ref: '#/components/schemas/AccountV2'
             nullable: true
+    AccountProofInputs:
+      type: object
+      required:
+      - hash
+      - root
+      - rootIndex
+      - leafIndex
+      - merkleContext
+      properties:
+        hash:
+          type: string
+        leafIndex:
+          type: integer
+          format: uint64
+          minimum: 0
+        merkleContext:
+          $ref: '#/components/schemas/MerkleContextV2'
+        root:
+          type: string
+        rootIndex:
+          $ref: '#/components/schemas/RootIndex'
     AccountState:
       type: string
       enum:
@@ -4497,15 +4523,33 @@ components:
       type: array
       items:
         $ref: '#/components/schemas/AddressWithTree'
-    AddressSeq:
+    AddressProofInputs:
       type: object
       required:
       - address
-      - seq
+      - root
+      - rootIndex
+      - merkleContext
+      properties:
+        address:
+          type: string
+        merkleContext:
+          $ref: '#/components/schemas/MerkleContextV2'
+        root:
+          type: string
+        rootIndex:
+          type: integer
+          format: uint16
+          minimum: 0
+    AddressQueueIndex:
+      type: object
+      required:
+      - address
+      - queueIndex
       properties:
         address:
           $ref: '#/components/schemas/SerializablePubkey'
-        seq:
+        queueIndex:
           type: integer
           format: uint64
           minimum: 0
@@ -4610,36 +4654,19 @@ components:
     CompressedProofWithContextV2:
       type: object
       required:
-      - roots
-      - rootIndices
-      - leafIndices
-      - leaves
-      - merkleContexts
+      - accounts
+      - addresses
       properties:
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountProofInputs'
+        addresses:
+          type: array
+          items:
+            $ref: '#/components/schemas/AddressProofInputs'
         compressedProof:
           $ref: '#/components/schemas/CompressedProof'
-        leafIndices:
-          type: array
-          items:
-            type: integer
-            format: uint32
-            minimum: 0
-        leaves:
-          type: array
-          items:
-            type: string
-        merkleContexts:
-          type: array
-          items:
-            $ref: '#/components/schemas/MerkleContextV2'
-        rootIndices:
-          type: array
-          items:
-            $ref: '#/components/schemas/RootIndex'
-        roots:
-          type: array
-          items:
-            type: string
     CompressionInfoV2:
       type: object
       required:
@@ -4938,8 +4965,8 @@ components:
     SerializablePubkey:
       type: string
       description: A Solana public key represented as a base58 string.
-      default: 111111131h1vYVSYuKP6AhS86fbRdMw9XHiZAvAaj
-      example: 111111131h1vYVSYuKP6AhS86fbRdMw9XHiZAvAaj
+      default: 11157t3sqMV725NVRLrVQbAu98Jjfk1uCKehJnXXQs
+      example: 11157t3sqMV725NVRLrVQbAu98Jjfk1uCKehJnXXQs
     SerializableSignature:
       type: string
       description: A Solana transaction signature.
