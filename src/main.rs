@@ -214,23 +214,23 @@ async fn main() {
         std::process::exit(1);
     }
 
-    if let Err(err) =
-        photon_indexer::ingester::parser::set_light_compressed_token_program_id(&args.light_compressed_token_program_id)
-    {
+    if let Err(err) = photon_indexer::ingester::parser::set_light_compressed_token_program_id(
+        &args.light_compressed_token_program_id,
+    ) {
         error!("Failed to set light compressed token program ID: {}", err);
         std::process::exit(1);
     }
 
-    if let Err(err) =
-        photon_indexer::ingester::parser::set_light_system_program_pinocchio_id(&args.light_system_program_pinocchio_id)
-    {
+    if let Err(err) = photon_indexer::ingester::parser::set_light_system_program_pinocchio_id(
+        &args.light_system_program_pinocchio_id,
+    ) {
         error!("Failed to set light system program pinocchio ID: {}", err);
         std::process::exit(1);
     }
 
-    if let Err(err) =
-        photon_indexer::ingester::parser::set_light_registry_program_id(&args.light_registry_program_id)
-    {
+    if let Err(err) = photon_indexer::ingester::parser::set_light_registry_program_id(
+        &args.light_registry_program_id,
+    ) {
         error!("Failed to set light registry program ID: {}", err);
         std::process::exit(1);
     }
