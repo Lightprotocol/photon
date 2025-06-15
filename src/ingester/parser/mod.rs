@@ -28,7 +28,7 @@ pub fn get_compression_program_id() -> Pubkey {
 static LIGHT_COMPRESSED_TOKEN_PROGRAM_ID: OnceLock<Pubkey> = OnceLock::new();
 pub fn get_light_compressed_token_program_id() -> Pubkey {
     *LIGHT_COMPRESSED_TOKEN_PROGRAM_ID
-        .get_or_init(|| pubkey!("EpgpSRSHbohAPC5XixPCNsNeq8yHfNsj3XorUWk6hVMT"))
+        .get_or_init(|| pubkey!("EpgpSRSHbohAPC5XixPCNsNeq8yHfNsj3XorUWk6hVMT1"))
 }
 
 static LIGHT_SYSTEM_PROGRAM_PINOCCHIO_ID: OnceLock<Pubkey> = OnceLock::new();
