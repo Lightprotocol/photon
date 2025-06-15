@@ -81,11 +81,13 @@ solana-pubkey = "2.3.0"
 
 solana-transaction-status = "1.18.0"
 
-light-concurrent-merkle-tree = "2.0.1"
-light-batched-merkle-tree = "0.2.0"
-light-merkle-tree-metadata = "0.2.0"
-light-compressed-account = "0.2.0"
-light-hasher = "3.0.0"
+light-concurrent-merkle-tree = { git = "https://github.com/lightprotocol/light-protocol", rev = "0ddbbbeed9a63757727d5be4d25d2700cf7ae5a1" }
+light-batched-merkle-tree = { git = "https://github.com/lightprotocol/light-protocol", rev = "0ddbbbeed9a63757727d5be4d25d2700cf7ae5a1" }
+light-merkle-tree-metadata = { git = "https://github.com/lightprotocol/light-protocol", rev = "0ddbbbeed9a63757727d5be4d25d2700cf7ae5a1" }
+light-compressed-account = { git = "https://github.com/lightprotocol/light-protocol", rev = "0ddbbbeed9a63757727d5be4d25d2700cf7ae5a1", features = [
+    "anchor",
+] }
+light-hasher = { git = "https://github.com/lightprotocol/light-protocol", rev = "0ddbbbeed9a63757727d5be4d25d2700cf7ae5a1" }
 
 light-poseidon = "0.3.0"
 
