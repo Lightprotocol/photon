@@ -706,8 +706,6 @@ pub async fn fetch_token_accounts_v2(
         .order_by(token_accounts::Column::Mint, sea_orm::Order::Asc)
         .order_by(token_accounts::Column::Hash, sea_orm::Order::Asc)
         .limit(limit)
-        .order_by(token_accounts::Column::Mint, sea_orm::Order::Asc)
-        .order_by(token_accounts::Column::Hash, sea_orm::Order::Asc)
         .all(conn)
         .await?
         .drain(..)
