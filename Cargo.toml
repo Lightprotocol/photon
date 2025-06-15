@@ -81,11 +81,21 @@ solana-pubkey = "2.3.0"
 
 solana-transaction-status = "1.18.0"
 
-light-concurrent-merkle-tree = "2.1.0"
-light-batched-merkle-tree = "0.3.0"
-light-merkle-tree-metadata = "0.3.0"
-light-compressed-account = { version = "0.3.0", features = ["anchor"] }
-light-hasher = { version = "3.1.0" }
+
+# light-concurrent-merkle-tree = "2.1.0"
+# light-batched-merkle-tree = "0.3.0"
+# light-merkle-tree-metadata = "0.3.0"
+# light-compressed-account = { version = "0.3.0", features = ["anchor"] }
+# light-hasher = { version = "3.1.0" }
+
+
+light-batched-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "a46802310030c30d7137309432faeb7eb2fbcc21" }
+light-compressed-account = { git = "https://github.com/Lightprotocol/light-protocol", rev = "a46802310030c30d7137309432faeb7eb2fbcc21", features = [
+    "anchor",
+] }
+light-concurrent-merkle-tree = { git = "https://github.com/Lightprotocol/light-protocol", rev = "a46802310030c30d7137309432faeb7eb2fbcc21" }
+light-hasher = { git = "https://github.com/Lightprotocol/light-protocol", rev = "a46802310030c30d7137309432faeb7eb2fbcc21" }
+light-merkle-tree-metadata = { git = "https://github.com/Lightprotocol/light-protocol", rev = "a46802310030c30d7137309432faeb7eb2fbcc21" }
 
 light-poseidon = "0.3.0"
 
@@ -123,7 +133,7 @@ yellowstone-grpc-client = "1.15.0"
 yellowstone-grpc-proto = "1.14.0"
 cadence = "1.4.0"
 async-stream = "0.3.5"
-rand = "0.8.5"
+rand = "0.8"
 bincode = "1.3.3"
 rust-s3 = "0.34.0"
 

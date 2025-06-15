@@ -74,7 +74,7 @@ pub struct AddressQueueUpdate {
 impl From<NewAddress> for AddressQueueUpdate {
     fn from(new_address: NewAddress) -> Self {
         AddressQueueUpdate {
-            tree: SerializablePubkey::from(new_address.mt_pubkey),
+            tree: SerializablePubkey::from(Pubkey::from(new_address.mt_pubkey.to_bytes())),
             address: new_address.address,
             queue_index: new_address.queue_index,
         }
