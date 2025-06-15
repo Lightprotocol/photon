@@ -309,6 +309,26 @@ lazy_static! {
         );
 
         m.insert(
+            "G9MfUeTZo4fQ3LM6fxPWQXvZBGdtPBnwHh9cAGgxYuGa".to_string(),
+            TreeInfo {
+                tree: pubkey!("G9MfUeTZo4fQ3LM6fxPWQXvZBGdtPBnwHh9cAGgxYuGa"),
+                queue: pubkey!("4BrwfzidwWd1ApCBidJPKpuHS1kucHXYXGsX658nSie2"),
+                height: 32,
+                tree_type: TreeType::StateV2,
+            },
+        );
+
+        m.insert(
+            "4BrwfzidwWd1ApCBidJPKpuHS1kucHXYXGsX658nSie2".to_string(),
+            TreeInfo {
+                tree: pubkey!("G9MfUeTZo4fQ3LM6fxPWQXvZBGdtPBnwHh9cAGgxYuGa"),
+                queue: pubkey!("4BrwfzidwWd1ApCBidJPKpuHS1kucHXYXGsX658nSie2"),
+                height: 32,
+                tree_type: TreeType::StateV2,
+            },
+        );
+
+        m.insert(
             "DFp2gBJRVCFumMTCAWqX8dkQrzSiKn6AMKVDyppL5pbV".to_string(),
             TreeInfo {
                 tree: pubkey!("DFp2gBJRVCFumMTCAWqX8dkQrzSiKn6AMKVDyppL5pbV"),
@@ -333,6 +353,16 @@ lazy_static! {
             TreeInfo {
                 tree: pubkey!("ACef6Ge9GVyPbSuaUvqX47akLWWVAnYMyYSrhD2D9JGJ"),
                 queue: pubkey!("ACef6Ge9GVyPbSuaUvqX47akLWWVAnYMyYSrhD2D9JGJ"),
+                height: 40,
+                tree_type: TreeType::AddressV2,
+            },
+        );
+
+        m.insert(
+            "6QX1mUfiShBcJdB3gNSxCWVAo8mTAp3duinJCjFBgkbm".to_string(),
+            TreeInfo {
+                tree: pubkey!("6QX1mUfiShBcJdB3gNSxCWVAo8mTAp3duinJCjFBgkbm"),
+                queue: pubkey!("6QX1mUfiShBcJdB3gNSxCWVAo8mTAp3duinJCjFBgkbm"),
                 height: 40,
                 tree_type: TreeType::AddressV2,
             },
