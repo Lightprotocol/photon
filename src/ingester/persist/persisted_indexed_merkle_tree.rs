@@ -560,25 +560,40 @@ pub async fn multi_append(
         println!("No duplicate value entries found.");
     }
 
-    let active_elements = active_elements.into_iter();
+    // Insert elements one by one to identify the problematic element
+    for (index, element) in active_elements.into_iter().enumerate() {
+        println!(
+            "Inserting element {} - leaf_index: {:?}, value: {:?}",
+            index, element.leaf_index, element.value
+        );
 
-    indexed_trees::Entity::insert_many(active_elements)
-        .on_conflict(
-            OnConflict::columns([
-                indexed_trees::Column::Tree,
-                indexed_trees::Column::LeafIndex,
-            ])
-            .update_columns([
-                indexed_trees::Column::NextIndex,
-                indexed_trees::Column::NextValue,
-            ])
-            .to_owned(),
-        )
-        .exec(txn)
-        .await
-        .map_err(|e| {
-            IngesterError::DatabaseError(format!("Failed to insert indexed tree elements: {}", e))
-        })?;
+        let result = indexed_trees::Entity::insert(element.clone())
+            .on_conflict(
+                OnConflict::columns([
+                    indexed_trees::Column::Tree,
+                    indexed_trees::Column::LeafIndex,
+                ])
+                .update_columns([
+                    indexed_trees::Column::NextIndex,
+                    indexed_trees::Column::NextValue,
+                ])
+                .to_owned(),
+            )
+            .exec(txn)
+            .await;
+
+        if let Err(e) = result {
+            println!(
+                "ERROR: Failed to insert element {} with leaf_index: {:?}, value: {:?}",
+                index, element.leaf_index, element.value
+            );
+            println!("Error details: {}", e);
+            return Err(IngesterError::DatabaseError(format!(
+                "Failed to insert indexed tree element at index {}: {}",
+                index, e
+            )));
+        }
+    }
 
     let leaf_nodes = elements_to_update
         .values()
