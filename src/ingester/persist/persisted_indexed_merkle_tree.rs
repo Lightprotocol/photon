@@ -572,29 +572,35 @@ pub async fn multi_append(
     // Insert elements one by one to identify the problematic element
     for (index, element) in active_elements.into_iter().enumerate() {
         println!(
-            "Inserting element {} - leaf_index: {:?}, value: {:?}, next_index: {:?}, next_value: {:?}",
-            index, element.leaf_index, element.value, element.next_index, element.next_value
+            "Inserting element {} - tree: {:?}, leaf_index: {:?}, value: {:?}, next_index: {:?}, next_value: {:?}, seq: {:?}",
+            index, element.tree, element.leaf_index, element.value, element.next_index, element.next_value, element.seq
         );
 
-        let result = indexed_trees::Entity::insert(element.clone())
+        let mut query = indexed_trees::Entity::insert(element.clone())
             .on_conflict(
                 OnConflict::columns([
                     indexed_trees::Column::Tree,
                     indexed_trees::Column::LeafIndex,
                 ])
                 .update_columns([
+                    indexed_trees::Column::Value,
                     indexed_trees::Column::NextIndex,
                     indexed_trees::Column::NextValue,
+                    indexed_trees::Column::Seq,
                 ])
                 .to_owned(),
             )
-            .exec(txn)
-            .await;
+            .build(txn.get_database_backend());
+
+        // Add seq-based conflict resolution like in update_indexed_tree_leaves_v1
+        query.sql = format!("{} WHERE excluded.seq >= indexed_trees.seq", query.sql);
+
+        let result = txn.execute(query).await;
 
         if let Err(e) = result {
             println!(
-                "ERROR: Failed to insert element {} with leaf_index: {:?}, value: {:?}, next_index: {:?}, next_value: {:?}",
-                index, element.leaf_index, element.value, element.next_index, element.next_value
+                "ERROR: Failed to insert element {} with tree: {:?}, leaf_index: {:?}, value: {:?}, next_index: {:?}, next_value: {:?}, seq: {:?}",
+                index, element.tree, element.leaf_index, element.value, element.next_index, element.next_value, element.seq
             );
             println!("Error details: {}", e);
             return Err(IngesterError::DatabaseError(format!(
