@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::dao::generated::{accounts, address_queue};
@@ -204,7 +206,19 @@ async fn persist_batch_address_append_event(
         .map(|address| address.address.clone())
         .collect::<Vec<_>>();
 
-    println!("address_values: {:?}", address_values);
+    // find duplicates in address_values
+    let duplicates = address_values
+        .iter()
+        .fold(HashMap::new(), |mut acc, addr| {
+            *acc.entry(addr).or_insert(0) += 1;
+            acc
+        })
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(addr, _)| addr)
+        .collect::<Vec<_>>();
+
+    println!("duplicates: {:?}", duplicates);
 
     // 1. Append the addresses to the indexed merkle tree.
     multi_append(
