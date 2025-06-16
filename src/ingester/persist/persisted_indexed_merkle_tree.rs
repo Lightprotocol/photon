@@ -9,8 +9,9 @@ use light_poseidon::Poseidon;
 use log::info;
 use num_bigint::BigUint;
 use sea_orm::{
-    sea_query::OnConflict, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseTransaction,
-    EntityTrait, QueryFilter, QueryTrait, Set, Statement, TransactionTrait,
+    sea_query::{Expr, OnConflict},
+    ActiveValue, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait,
+    QueryFilter, QueryTrait, Set, Statement, TransactionTrait,
 };
 use solana_pubkey::Pubkey;
 
@@ -569,49 +570,185 @@ pub async fn multi_append(
         }
     }
 
-    // Insert elements one by one to identify the problematic element
-    for (index, element) in active_elements.into_iter().enumerate() {
-        println!(
-            "Inserting element {} - tree: {:?}, leaf_index: {:?}, value: {:?}, next_index: {:?}, next_value: {:?}, seq: {:?}",
-            index, element.tree, element.leaf_index, element.value, element.next_index, element.next_value, element.seq
-        );
+    // Check which elements already exist
+    let tree_leaf_pairs: Vec<(Vec<u8>, i64)> = active_elements
+        .iter()
+        .filter_map(|element| {
+            if let (ActiveValue::Set(tree), ActiveValue::Set(leaf_index)) =
+                (&element.tree, &element.leaf_index)
+            {
+                Some((tree.clone(), *leaf_index))
+            } else {
+                None
+            }
+        })
+        .collect();
 
-        let mut query = indexed_trees::Entity::insert(element.clone())
-            .on_conflict(
-                OnConflict::columns([
-                    indexed_trees::Column::Tree,
-                    indexed_trees::Column::LeafIndex,
-                ])
-                .update_columns([
-                    indexed_trees::Column::Value,
-                    indexed_trees::Column::NextIndex,
-                    indexed_trees::Column::NextValue,
-                    indexed_trees::Column::Seq,
-                ])
-                .to_owned(),
+    // Query for existing records
+    let mut existing_records = HashMap::new();
+    for (tree, leaf_index) in &tree_leaf_pairs {
+        let existing = indexed_trees::Entity::find()
+            .filter(
+                indexed_trees::Column::Tree
+                    .eq(tree.clone())
+                    .and(indexed_trees::Column::LeafIndex.eq(*leaf_index)),
             )
-            .build(txn.get_database_backend());
+            .one(txn)
+            .await
+            .map_err(|e| {
+                IngesterError::DatabaseError(format!("Failed to query existing records: {}", e))
+            })?;
 
-        // Add seq-based conflict resolution like in update_indexed_tree_leaves_v1
-        query.sql = format!("{} WHERE excluded.seq >= indexed_trees.seq", query.sql);
+        if let Some(record) = existing {
+            existing_records.insert((tree.clone(), *leaf_index), record);
+        }
+    }
 
-        let result = txn.execute(query).await;
+    // Separate elements into updates and inserts
+    let mut elements_to_update_list = Vec::new();
+    let mut elements_to_insert = Vec::new();
+
+    for element in active_elements {
+        if let (ActiveValue::Set(tree), ActiveValue::Set(leaf_index)) =
+            (&element.tree, &element.leaf_index)
+        {
+            let key = (tree.clone(), *leaf_index);
+            if existing_records.contains_key(&key) {
+                elements_to_update_list.push(element);
+            } else {
+                elements_to_insert.push(element);
+            }
+        }
+    }
+
+    // Perform updates
+    for element in &elements_to_update_list {
+        if let (
+            ActiveValue::Set(tree),
+            ActiveValue::Set(leaf_index),
+            ActiveValue::Set(value),
+            ActiveValue::Set(next_index),
+            ActiveValue::Set(next_value),
+            ActiveValue::Set(seq),
+        ) = (
+            &element.tree,
+            &element.leaf_index,
+            &element.value,
+            &element.next_index,
+            &element.next_value,
+            &element.seq,
+        ) {
+            println!(
+                "Updating existing element - tree: {:?}, leaf_index: {}, value: {:?}, next_index: {}, next_value: {:?}, seq: {:?}",
+                tree, leaf_index, value, next_index, next_value, seq
+            );
+
+            let result = indexed_trees::Entity::update_many()
+                .col_expr(indexed_trees::Column::Value, Expr::value(value.clone()))
+                .col_expr(indexed_trees::Column::NextIndex, Expr::value(*next_index))
+                .col_expr(
+                    indexed_trees::Column::NextValue,
+                    Expr::value(next_value.clone()),
+                )
+                .col_expr(indexed_trees::Column::Seq, Expr::value(*seq))
+                .filter(
+                    indexed_trees::Column::Tree
+                        .eq(tree.clone())
+                        .and(indexed_trees::Column::LeafIndex.eq(*leaf_index))
+                        .and(indexed_trees::Column::Seq.lte(seq.unwrap_or(0))), // Only update if seq is greater or equal
+                )
+                .exec(txn)
+                .await;
+
+            if let Err(e) = result {
+                println!(
+                    "ERROR: Failed to update element with tree: {:?}, leaf_index: {}, error: {}",
+                    tree, leaf_index, e
+                );
+                return Err(IngesterError::DatabaseError(format!(
+                    "Failed to update indexed tree element: {}",
+                    e
+                )));
+            }
+        }
+    }
+
+    // Perform inserts
+    if !elements_to_insert.is_empty() {
+        println!("Inserting {} new elements", elements_to_insert.len());
+
+        let result = indexed_trees::Entity::insert_many(elements_to_insert.clone())
+            .exec(txn)
+            .await;
 
         if let Err(e) = result {
-            println!(
-                "ERROR: Failed to insert element {} with tree: {:?}, leaf_index: {:?}, value: {:?}, next_index: {:?}, next_value: {:?}, seq: {:?}",
-                index, element.tree, element.leaf_index, element.value, element.next_index, element.next_value, element.seq
-            );
-            println!("Error details: {}", e);
+            println!("ERROR: Failed to insert new elements: {}", e);
             return Err(IngesterError::DatabaseError(format!(
-                "Failed to insert indexed tree element at index {}: {}",
-                index, e
+                "Failed to insert indexed tree elements: {}",
+                e
             )));
         }
     }
 
-    let leaf_nodes = elements_to_update
-        .values()
+    // Convert updated elements back to Models for leaf node creation
+    let mut updated_models = Vec::new();
+    for element in &elements_to_update_list {
+        if let (
+            ActiveValue::Set(tree),
+            ActiveValue::Set(leaf_index),
+            ActiveValue::Set(value),
+            ActiveValue::Set(next_index),
+            ActiveValue::Set(next_value),
+            ActiveValue::Set(seq),
+        ) = (
+            &element.tree,
+            &element.leaf_index,
+            &element.value,
+            &element.next_index,
+            &element.next_value,
+            &element.seq,
+        ) {
+            updated_models.push(indexed_trees::Model {
+                tree: tree.clone(),
+                leaf_index: *leaf_index,
+                value: value.clone(),
+                next_index: *next_index,
+                next_value: next_value.clone(),
+                seq: *seq,
+            });
+        }
+    }
+
+    // Convert inserted elements to Models for leaf node creation
+    for element in &elements_to_insert {
+        if let (
+            ActiveValue::Set(tree),
+            ActiveValue::Set(leaf_index),
+            ActiveValue::Set(value),
+            ActiveValue::Set(next_index),
+            ActiveValue::Set(next_value),
+            ActiveValue::Set(seq),
+        ) = (
+            &element.tree,
+            &element.leaf_index,
+            &element.value,
+            &element.next_index,
+            &element.next_value,
+            &element.seq,
+        ) {
+            updated_models.push(indexed_trees::Model {
+                tree: tree.clone(),
+                leaf_index: *leaf_index,
+                value: value.clone(),
+                next_index: *next_index,
+                next_value: next_value.clone(),
+                seq: *seq,
+            });
+        }
+    }
+
+    let leaf_nodes = updated_models
+        .iter()
         .map(|x| {
             Ok(LeafNode {
                 tree: SerializablePubkey::try_from(x.tree.clone()).map_err(|e| {
