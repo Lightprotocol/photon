@@ -20,7 +20,7 @@ const ZKP_BATCH_SIZE: usize = 500;
 
 /// We need to find the events of the same tree:
 /// - order them by sequence number and execute them in order
-///     HashMap<pubkey, Vec<Event(BatchAppendEvent, seq)>>
+/// HashMap<pubkey, Vec<Event(BatchAppendEvent, seq)>>
 /// - execute a single function call to persist all changed nodes
 pub async fn persist_batch_events(
     txn: &DatabaseTransaction,
@@ -203,6 +203,8 @@ async fn persist_batch_address_append_event(
         .iter()
         .map(|address| address.address.clone())
         .collect::<Vec<_>>();
+
+    println!("address_values: {:?}", address_values);
 
     // 1. Append the addresses to the indexed merkle tree.
     multi_append(
