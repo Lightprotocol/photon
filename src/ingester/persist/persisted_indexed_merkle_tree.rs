@@ -584,7 +584,7 @@ pub async fn multi_append(
         })
         .collect();
 
-    // Query for existing records
+    // Query for existing records by primary key
     let mut existing_records = HashMap::new();
     for (tree, leaf_index) in &tree_leaf_pairs {
         let existing = indexed_trees::Entity::find()
@@ -720,6 +720,7 @@ pub async fn multi_append(
     }
 
     // Convert inserted elements to Models for leaf node creation
+    // We need to use the original list since we split it for insertion
     for element in &elements_to_insert {
         if let (
             ActiveValue::Set(tree),
