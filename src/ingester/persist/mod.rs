@@ -52,7 +52,8 @@ mod persisted_batch_event;
 
 mod spend;
 
-pub const COMPRESSED_TOKEN_PROGRAM: Pubkey = pubkey!("cTokenmWW8bLPjZEBAUgYy3zKxQZW6VKi7bqNFEVv3m");
+pub const COMPRESSED_TOKEN_PROGRAM: Pubkey =
+    pubkey!("EpgpSRSHbohAPC5XixPCNsNeq8yHfNsj3XorUWk6hVMT");
 
 // To avoid exceeding the 64k total parameter limit
 pub const MAX_SQL_INSERTS: usize = 500;
@@ -243,6 +244,8 @@ async fn persist_state_tree_history(
 }
 
 pub fn parse_token_data(account: &Account) -> Result<Option<TokenData>, IngesterError> {
+    println!("parsing token data");
+    println!("token data ouwner = {:?}", account.owner);
     match account.data.clone() {
         Some(data) if account.owner.0 == COMPRESSED_TOKEN_PROGRAM => {
             let data_slice = data.data.0.as_slice();
@@ -405,9 +408,9 @@ async fn append_output_accounts(
     txn: &DatabaseTransaction,
     out_accounts: &[AccountWithContext],
 ) -> Result<(), IngesterError> {
+    println!("appending {} accounts", out_accounts.len());
     let mut account_models = Vec::new();
     let mut token_accounts = Vec::new();
-
     for account in out_accounts {
         account_models.push(accounts::ActiveModel {
             hash: Set(account.account.hash.to_vec()),
@@ -437,6 +440,7 @@ async fn append_output_accounts(
         });
 
         if let Some(token_data) = parse_token_data(&account.account)? {
+            println!("token data: {:?}", token_data);
             token_accounts.push(EnrichedTokenAccount {
                 token_data,
                 hash: account.account.hash.clone(),
@@ -461,7 +465,7 @@ async fn append_output_accounts(
         .await?;
 
         if !token_accounts.is_empty() {
-            debug!("Persisting {} token accounts...", token_accounts.len());
+            println!("Persisting {} token accounts...", token_accounts.len());
             persist_token_accounts(txn, token_accounts).await?;
         }
     }
