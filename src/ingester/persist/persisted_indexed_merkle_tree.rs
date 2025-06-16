@@ -538,6 +538,8 @@ pub async fn multi_append(
         .collect();
     if !duplicate_leaf_indices.is_empty() {
         println!("Duplicate leaf_index values: {:?}", duplicate_leaf_indices);
+    } else {
+        println!("No duplicate leaf_index values found.");
     }
 
     // Find and print duplicate value entries
@@ -554,6 +556,8 @@ pub async fn multi_append(
         .collect();
     if !duplicate_values.is_empty() {
         println!("Duplicate value entries: {:?}", duplicate_values);
+    } else {
+        println!("No duplicate value entries found.");
     }
 
     let active_elements = active_elements.into_iter();
