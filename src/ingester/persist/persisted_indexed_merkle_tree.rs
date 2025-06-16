@@ -482,6 +482,13 @@ pub async fn multi_append(
         }
     }
 
+    // find [0; 32] in values and print it
+    for value in values.clone() {
+        if value == [0; 32].to_vec() {
+            println!("Found [0; 32] in values");
+        }
+    }
+
     for value in values.clone() {
         current_index += 1;
         let mut indexed_element = indexed_trees::Model {
@@ -524,40 +531,42 @@ pub async fn multi_append(
         })
         .collect();
 
-    // Find and print duplicate leaf_index values
-    let mut leaf_index_counts: HashMap<i64, usize> = HashMap::new();
-    for element in &active_elements {
-        if let sea_orm::ActiveValue::Set(leaf_index) = &element.leaf_index {
-            *leaf_index_counts.entry(*leaf_index).or_insert(0) += 1;
+    {
+        // Find and print duplicate leaf_index values
+        let mut leaf_index_counts: HashMap<i64, usize> = HashMap::new();
+        for element in &active_elements {
+            if let sea_orm::ActiveValue::Set(leaf_index) = &element.leaf_index {
+                *leaf_index_counts.entry(*leaf_index).or_insert(0) += 1;
+            }
         }
-    }
-    let duplicate_leaf_indices: Vec<i64> = leaf_index_counts
-        .iter()
-        .filter(|(_, &count)| count > 1)
-        .map(|(&leaf_index, _)| leaf_index)
-        .collect();
-    if !duplicate_leaf_indices.is_empty() {
-        println!("Duplicate leaf_index values: {:?}", duplicate_leaf_indices);
-    } else {
-        println!("No duplicate leaf_index values found.");
-    }
+        let duplicate_leaf_indices: Vec<i64> = leaf_index_counts
+            .iter()
+            .filter(|(_, &count)| count > 1)
+            .map(|(&leaf_index, _)| leaf_index)
+            .collect();
+        if !duplicate_leaf_indices.is_empty() {
+            println!("Duplicate leaf_index values: {:?}", duplicate_leaf_indices);
+        } else {
+            println!("No duplicate leaf_index values found.");
+        }
 
-    // Find and print duplicate value entries
-    let mut value_counts: HashMap<Vec<u8>, usize> = HashMap::new();
-    for element in &active_elements {
-        if let sea_orm::ActiveValue::Set(value) = &element.value {
-            *value_counts.entry(value.clone()).or_insert(0) += 1;
+        // Find and print duplicate value entries
+        let mut value_counts: HashMap<Vec<u8>, usize> = HashMap::new();
+        for element in &active_elements {
+            if let sea_orm::ActiveValue::Set(value) = &element.value {
+                *value_counts.entry(value.clone()).or_insert(0) += 1;
+            }
         }
-    }
-    let duplicate_values: Vec<Vec<u8>> = value_counts
-        .iter()
-        .filter(|(_, &count)| count > 1)
-        .map(|(value, _)| value.clone())
-        .collect();
-    if !duplicate_values.is_empty() {
-        println!("Duplicate value entries: {:?}", duplicate_values);
-    } else {
-        println!("No duplicate value entries found.");
+        let duplicate_values: Vec<Vec<u8>> = value_counts
+            .iter()
+            .filter(|(_, &count)| count > 1)
+            .map(|(value, _)| value.clone())
+            .collect();
+        if !duplicate_values.is_empty() {
+            println!("Duplicate value entries: {:?}", duplicate_values);
+        } else {
+            println!("No duplicate value entries found.");
+        }
     }
 
     // Insert elements one by one to identify the problematic element
