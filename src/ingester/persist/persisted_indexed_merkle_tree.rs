@@ -9,9 +9,8 @@ use light_poseidon::Poseidon;
 use log::info;
 use num_bigint::BigUint;
 use sea_orm::{
-    sea_query::{Expr, OnConflict},
-    ActiveValue, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait,
-    QueryFilter, QueryTrait, Set, Statement, TransactionTrait,
+    sea_query::OnConflict, ActiveValue, ColumnTrait, ConnectionTrait, DatabaseBackend,
+    DatabaseTransaction, EntityTrait, QueryFilter, QueryTrait, Set, Statement, TransactionTrait,
 };
 use solana_pubkey::Pubkey;
 
@@ -532,221 +531,65 @@ pub async fn multi_append(
         })
         .collect();
 
-    {
-        // Find and print duplicate leaf_index values
-        let mut leaf_index_counts: HashMap<i64, usize> = HashMap::new();
-        for element in &active_elements {
-            if let sea_orm::ActiveValue::Set(leaf_index) = &element.leaf_index {
-                *leaf_index_counts.entry(*leaf_index).or_insert(0) += 1;
-            }
-        }
-        let duplicate_leaf_indices: Vec<i64> = leaf_index_counts
-            .iter()
-            .filter(|(_, &count)| count > 1)
-            .map(|(&leaf_index, _)| leaf_index)
-            .collect();
-        if !duplicate_leaf_indices.is_empty() {
-            println!("Duplicate leaf_index values: {:?}", duplicate_leaf_indices);
-        } else {
-            println!("No duplicate leaf_index values found.");
-        }
+    let mut query = indexed_trees::Entity::insert_many(active_elements.clone())
+        .on_conflict(
+            OnConflict::columns([
+                indexed_trees::Column::Tree,
+                indexed_trees::Column::LeafIndex,
+            ])
+            .update_columns([
+                indexed_trees::Column::Value,
+                indexed_trees::Column::NextIndex,
+                indexed_trees::Column::NextValue,
+                indexed_trees::Column::Seq,
+            ])
+            .to_owned(),
+        )
+        .build(txn.get_database_backend());
 
-        // Find and print duplicate value entries
-        let mut value_counts: HashMap<Vec<u8>, usize> = HashMap::new();
-        for element in &active_elements {
-            if let sea_orm::ActiveValue::Set(value) = &element.value {
-                *value_counts.entry(value.clone()).or_insert(0) += 1;
-            }
-        }
-        let duplicate_values: Vec<Vec<u8>> = value_counts
-            .iter()
-            .filter(|(_, &count)| count > 1)
-            .map(|(value, _)| value.clone())
-            .collect();
-        if !duplicate_values.is_empty() {
-            println!("Duplicate value entries: {:?}", duplicate_values);
-        } else {
-            println!("No duplicate value entries found.");
-        }
+    query.sql = format!("{} WHERE excluded.seq >= indexed_trees.seq", query.sql);
+
+    let result = txn.execute(query).await;
+
+    if let Err(e) = result {
+        println!("ERROR: Failed to insert/update elements: {}", e);
+        return Err(IngesterError::DatabaseError(format!(
+            "Failed to insert/update indexed tree elements: {}",
+            e
+        )));
     }
 
-    // Check which elements already exist
-    let tree_leaf_pairs: Vec<(Vec<u8>, i64)> = active_elements
+    let updated_models: Vec<indexed_trees::Model> = active_elements
         .iter()
         .filter_map(|element| {
-            if let (ActiveValue::Set(tree), ActiveValue::Set(leaf_index)) =
-                (&element.tree, &element.leaf_index)
-            {
-                Some((tree.clone(), *leaf_index))
+            if let (
+                ActiveValue::Set(tree),
+                ActiveValue::Set(leaf_index),
+                ActiveValue::Set(value),
+                ActiveValue::Set(next_index),
+                ActiveValue::Set(next_value),
+                ActiveValue::Set(seq),
+            ) = (
+                &element.tree,
+                &element.leaf_index,
+                &element.value,
+                &element.next_index,
+                &element.next_value,
+                &element.seq,
+            ) {
+                Some(indexed_trees::Model {
+                    tree: tree.clone(),
+                    leaf_index: *leaf_index,
+                    value: value.clone(),
+                    next_index: *next_index,
+                    next_value: next_value.clone(),
+                    seq: *seq,
+                })
             } else {
                 None
             }
         })
         .collect();
-
-    // Query for existing records by primary key
-    let mut existing_records = HashMap::new();
-    for (tree, leaf_index) in &tree_leaf_pairs {
-        let existing = indexed_trees::Entity::find()
-            .filter(
-                indexed_trees::Column::Tree
-                    .eq(tree.clone())
-                    .and(indexed_trees::Column::LeafIndex.eq(*leaf_index)),
-            )
-            .one(txn)
-            .await
-            .map_err(|e| {
-                IngesterError::DatabaseError(format!("Failed to query existing records: {}", e))
-            })?;
-
-        if let Some(record) = existing {
-            existing_records.insert((tree.clone(), *leaf_index), record);
-        }
-    }
-
-    // Separate elements into updates and inserts
-    let mut elements_to_update_list = Vec::new();
-    let mut elements_to_insert = Vec::new();
-
-    for element in active_elements {
-        if let (ActiveValue::Set(tree), ActiveValue::Set(leaf_index)) =
-            (&element.tree, &element.leaf_index)
-        {
-            let key = (tree.clone(), *leaf_index);
-            if existing_records.contains_key(&key) {
-                elements_to_update_list.push(element);
-            } else {
-                elements_to_insert.push(element);
-            }
-        }
-    }
-
-    // Perform updates
-    for element in &elements_to_update_list {
-        if let (
-            ActiveValue::Set(tree),
-            ActiveValue::Set(leaf_index),
-            ActiveValue::Set(value),
-            ActiveValue::Set(next_index),
-            ActiveValue::Set(next_value),
-            ActiveValue::Set(seq),
-        ) = (
-            &element.tree,
-            &element.leaf_index,
-            &element.value,
-            &element.next_index,
-            &element.next_value,
-            &element.seq,
-        ) {
-            println!(
-                "Updating existing element - tree: {:?}, leaf_index: {}, value: {:?}, next_index: {}, next_value: {:?}, seq: {:?}",
-                tree, leaf_index, value, next_index, next_value, seq
-            );
-
-            let result = indexed_trees::Entity::update_many()
-                .col_expr(indexed_trees::Column::Value, Expr::value(value.clone()))
-                .col_expr(indexed_trees::Column::NextIndex, Expr::value(*next_index))
-                .col_expr(
-                    indexed_trees::Column::NextValue,
-                    Expr::value(next_value.clone()),
-                )
-                .col_expr(indexed_trees::Column::Seq, Expr::value(*seq))
-                .filter(
-                    indexed_trees::Column::Tree
-                        .eq(tree.clone())
-                        .and(indexed_trees::Column::LeafIndex.eq(*leaf_index))
-                        .and(indexed_trees::Column::Seq.lte(seq.unwrap_or(0))), // Only update if seq is greater or equal
-                )
-                .exec(txn)
-                .await;
-
-            if let Err(e) = result {
-                println!(
-                    "ERROR: Failed to update element with tree: {:?}, leaf_index: {}, error: {}",
-                    tree, leaf_index, e
-                );
-                return Err(IngesterError::DatabaseError(format!(
-                    "Failed to update indexed tree element: {}",
-                    e
-                )));
-            }
-        }
-    }
-
-    // Perform inserts
-    if !elements_to_insert.is_empty() {
-        println!("Inserting {} new elements", elements_to_insert.len());
-
-        let result = indexed_trees::Entity::insert_many(elements_to_insert.clone())
-            .exec(txn)
-            .await;
-
-        if let Err(e) = result {
-            println!("ERROR: Failed to insert new elements: {}", e);
-            return Err(IngesterError::DatabaseError(format!(
-                "Failed to insert indexed tree elements: {}",
-                e
-            )));
-        }
-    }
-
-    // Convert updated elements back to Models for leaf node creation
-    let mut updated_models = Vec::new();
-    for element in &elements_to_update_list {
-        if let (
-            ActiveValue::Set(tree),
-            ActiveValue::Set(leaf_index),
-            ActiveValue::Set(value),
-            ActiveValue::Set(next_index),
-            ActiveValue::Set(next_value),
-            ActiveValue::Set(seq),
-        ) = (
-            &element.tree,
-            &element.leaf_index,
-            &element.value,
-            &element.next_index,
-            &element.next_value,
-            &element.seq,
-        ) {
-            updated_models.push(indexed_trees::Model {
-                tree: tree.clone(),
-                leaf_index: *leaf_index,
-                value: value.clone(),
-                next_index: *next_index,
-                next_value: next_value.clone(),
-                seq: *seq,
-            });
-        }
-    }
-
-    // Convert inserted elements to Models for leaf node creation
-    // We need to use the original list since we split it for insertion
-    for element in &elements_to_insert {
-        if let (
-            ActiveValue::Set(tree),
-            ActiveValue::Set(leaf_index),
-            ActiveValue::Set(value),
-            ActiveValue::Set(next_index),
-            ActiveValue::Set(next_value),
-            ActiveValue::Set(seq),
-        ) = (
-            &element.tree,
-            &element.leaf_index,
-            &element.value,
-            &element.next_index,
-            &element.next_value,
-            &element.seq,
-        ) {
-            updated_models.push(indexed_trees::Model {
-                tree: tree.clone(),
-                leaf_index: *leaf_index,
-                value: value.clone(),
-                next_index: *next_index,
-                next_value: next_value.clone(),
-                seq: *seq,
-            });
-        }
-    }
 
     let leaf_nodes = updated_models
         .iter()
@@ -761,19 +604,6 @@ pub async fn multi_append(
             })
         })
         .collect::<Result<Vec<LeafNode>, IngesterError>>()?;
-
-    let duplicate_leaf_nodes = leaf_nodes
-        .iter()
-        .filter(|node| {
-            leaf_nodes
-                .iter()
-                .filter(|other| node.hash == other.hash)
-                .count()
-                > 1
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    println!("duplicate leaf nodes: {:?}", duplicate_leaf_nodes);
 
     persist_leaf_nodes(txn, leaf_nodes, tree_height).await?;
 
