@@ -512,7 +512,7 @@ pub async fn multi_append(
         indexed_tree.insert(value, indexed_element);
     }
 
-    let active_elements = elements_to_update
+    let active_elements: Vec<indexed_trees::ActiveModel> = elements_to_update
         .values()
         .map(|x| indexed_trees::ActiveModel {
             tree: Set(tree.clone()),
@@ -521,9 +521,42 @@ pub async fn multi_append(
             next_index: Set(x.next_index),
             next_value: Set(x.next_value.clone()),
             seq: Set(Some(0)),
-        });
+        })
+        .collect();
 
-    println!("Active elements: {:?}", active_elements);
+    // Find and print duplicate leaf_index values
+    let mut leaf_index_counts: HashMap<i64, usize> = HashMap::new();
+    for element in &active_elements {
+        if let Set(leaf_index) = &element.leaf_index {
+            *leaf_index_counts.entry(*leaf_index).or_insert(0) += 1;
+        }
+    }
+    let duplicate_leaf_indices: Vec<i64> = leaf_index_counts
+        .iter()
+        .filter(|(_, &count)| count > 1)
+        .map(|(&leaf_index, _)| leaf_index)
+        .collect();
+    if !duplicate_leaf_indices.is_empty() {
+        println!("Duplicate leaf_index values: {:?}", duplicate_leaf_indices);
+    }
+
+    // Find and print duplicate value entries
+    let mut value_counts: HashMap<Vec<u8>, usize> = HashMap::new();
+    for element in &active_elements {
+        if let Set(value) = &element.value {
+            *value_counts.entry(value.clone()).or_insert(0) += 1;
+        }
+    }
+    let duplicate_values: Vec<Vec<u8>> = value_counts
+        .iter()
+        .filter(|(_, &count)| count > 1)
+        .map(|(value, _)| value.clone())
+        .collect();
+    if !duplicate_values.is_empty() {
+        println!("Duplicate value entries: {:?}", duplicate_values);
+    }
+
+    let active_elements = active_elements.into_iter();
 
     indexed_trees::Entity::insert_many(active_elements)
         .on_conflict(
