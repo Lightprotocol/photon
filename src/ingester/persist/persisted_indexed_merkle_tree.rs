@@ -555,6 +555,20 @@ pub async fn multi_append(
         })
         .collect::<Result<Vec<LeafNode>, IngesterError>>()?;
 
+    // find duplicate leaf nodes
+    let duplicate_leaf_nodes = leaf_nodes
+        .iter()
+        .filter(|node| {
+            leaf_nodes
+                .iter()
+                .filter(|other| node.hash == other.hash)
+                .count()
+                > 1
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    println!("duplicate leaf nodes: {:?}", duplicate_leaf_nodes);
+
     persist_leaf_nodes(txn, leaf_nodes, tree_height).await?;
 
     Ok(())
