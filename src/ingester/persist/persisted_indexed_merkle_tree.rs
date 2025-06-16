@@ -523,6 +523,8 @@ pub async fn multi_append(
             seq: Set(Some(0)),
         });
 
+    println!("Active elements: {:?}", active_elements);
+
     indexed_trees::Entity::insert_many(active_elements)
         .on_conflict(
             OnConflict::columns([
@@ -555,7 +557,6 @@ pub async fn multi_append(
         })
         .collect::<Result<Vec<LeafNode>, IngesterError>>()?;
 
-    // find duplicate leaf nodes
     let duplicate_leaf_nodes = leaf_nodes
         .iter()
         .filter(|node| {
