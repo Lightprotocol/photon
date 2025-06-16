@@ -527,7 +527,7 @@ pub async fn multi_append(
     // Find and print duplicate leaf_index values
     let mut leaf_index_counts: HashMap<i64, usize> = HashMap::new();
     for element in &active_elements {
-        if let Set(leaf_index) = &element.leaf_index {
+        if let sea_orm::ActiveValue::Set(leaf_index) = &element.leaf_index {
             *leaf_index_counts.entry(*leaf_index).or_insert(0) += 1;
         }
     }
@@ -543,7 +543,7 @@ pub async fn multi_append(
     // Find and print duplicate value entries
     let mut value_counts: HashMap<Vec<u8>, usize> = HashMap::new();
     for element in &active_elements {
-        if let Set(value) = &element.value {
+        if let sea_orm::ActiveValue::Set(value) = &element.value {
             *value_counts.entry(value.clone()).or_insert(0) += 1;
         }
     }
