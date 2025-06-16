@@ -572,8 +572,8 @@ pub async fn multi_append(
     // Insert elements one by one to identify the problematic element
     for (index, element) in active_elements.into_iter().enumerate() {
         println!(
-            "Inserting element {} - leaf_index: {:?}, value: {:?}",
-            index, element.leaf_index, element.value
+            "Inserting element {} - leaf_index: {:?}, value: {:?}, next_index: {:?}, next_value: {:?}",
+            index, element.leaf_index, element.value, element.next_index, element.next_value
         );
 
         let result = indexed_trees::Entity::insert(element.clone())
@@ -593,8 +593,8 @@ pub async fn multi_append(
 
         if let Err(e) = result {
             println!(
-                "ERROR: Failed to insert element {} with leaf_index: {:?}, value: {:?}",
-                index, element.leaf_index, element.value
+                "ERROR: Failed to insert element {} with leaf_index: {:?}, value: {:?}, next_index: {:?}, next_value: {:?}",
+                index, element.leaf_index, element.value, element.next_index, element.next_value
             );
             println!("Error details: {}", e);
             return Err(IngesterError::DatabaseError(format!(
