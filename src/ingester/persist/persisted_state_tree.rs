@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use light_batched_merkle_tree::constants::DEFAULT_BATCH_ADDRESS_TREE_HEIGHT;
+use light_hasher::Poseidon;
+use light_sparse_merkle_tree::SparseMerkleTree;
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseTransaction, DbErr, EntityTrait, Statement,
     TransactionTrait, Value,
@@ -12,6 +15,12 @@ use crate::dao::generated::state_trees;
 use crate::ingester::parser::tree_info::TreeInfo;
 use crate::ingester::persist::leaf_node::STATE_TREE_HEIGHT_V2;
 use crate::ingester::persist::persisted_indexed_merkle_tree::format_bytes;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    pub static ref REFERENCE_TREE: SparseMerkleTree<Poseidon, { DEFAULT_BATCH_ADDRESS_TREE_HEIGHT as usize }> =
+        SparseMerkleTree::<Poseidon, { DEFAULT_BATCH_ADDRESS_TREE_HEIGHT as usize }>::new_empty();
+}
 
 pub fn get_proof_path(index: i64, include_leaf: bool) -> Vec<i64> {
     let mut indexes = vec![];

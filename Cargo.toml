@@ -91,6 +91,8 @@ light-batched-merkle-tree = { git = "https://github.com/Lightprotocol/light-prot
 light-compressed-account = { git = "https://github.com/Lightprotocol/light-protocol", rev = "bf9bc7b1452a8dd71a4fbca7918982956da19dc9", features = [
     "anchor",
 ] }
+light-sparse-merkle-tree = "0.1.0"
+
 light-poseidon = "0.3.0"
 
 sqlx = { version = "0.6.2", features = [

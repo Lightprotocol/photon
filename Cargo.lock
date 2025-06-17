@@ -3924,6 +3924,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "light-sparse-merkle-tree"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "169c23a6a74ba86a94f322ed514f47465beb53c9b7fdbad45955d8116c945760"
+dependencies = [
+ "light-hasher 3.1.0",
+ "light-indexed-array",
+ "num-bigint 0.4.6",
+ "num-traits",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "light-verifier"
 version = "2.0.0"
 source = "git+https://github.com/Lightprotocol/light-protocol?rev=bf9bc7b1452a8dd71a4fbca7918982956da19dc9#bf9bc7b1452a8dd71a4fbca7918982956da19dc9"
@@ -4630,6 +4643,7 @@ dependencies = [
  "light-merkle-tree-metadata 0.3.0",
  "light-merkle-tree-reference",
  "light-poseidon 0.3.0",
+ "light-sparse-merkle-tree",
  "log",
  "num-bigint 0.4.6",
  "num-traits",
