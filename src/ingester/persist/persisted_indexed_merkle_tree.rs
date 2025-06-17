@@ -1,11 +1,16 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     str::FromStr,
+    sync::{Arc, Mutex},
 };
 
 use ark_bn254::Fr;
 use itertools::Itertools;
+use light_batched_merkle_tree::constants::DEFAULT_BATCH_ADDRESS_TREE_HEIGHT;
+use light_hasher::Poseidon as HasherPoseidon;
+
 use light_poseidon::Poseidon;
+use light_sparse_merkle_tree::SparseMerkleTree;
 use log::info;
 use num_bigint::BigUint;
 use sea_orm::{
@@ -31,11 +36,58 @@ use crate::{
 use lazy_static::lazy_static;
 use light_poseidon::PoseidonBytesHasher;
 
+#[derive(Clone)]
+pub enum ReferenceTree {
+    Height26(SparseMerkleTree<HasherPoseidon, 26>),
+    Height32(SparseMerkleTree<HasherPoseidon, 32>),
+    Height40(SparseMerkleTree<HasherPoseidon, 40>),
+}
+
+impl ReferenceTree {
+    pub fn new_empty(height: u32) -> Result<Self, IngesterError> {
+        match height {
+            26 => Ok(ReferenceTree::Height26(SparseMerkleTree::new_empty())),
+            32 => Ok(ReferenceTree::Height32(SparseMerkleTree::new_empty())),
+            40 => Ok(ReferenceTree::Height40(SparseMerkleTree::new_empty())),
+            _ => Err(IngesterError::DatabaseError(format!(
+                "Unsupported tree height: {}",
+                height
+            ))),
+        }
+    }
+
+    pub fn append(&mut self, value: [u8; 32]) {
+        match self {
+            ReferenceTree::Height26(tree) => {
+                let _proof = tree.append(value);
+            }
+            ReferenceTree::Height32(tree) => {
+                let _proof = tree.append(value);
+            }
+            ReferenceTree::Height40(tree) => {
+                let _proof = tree.append(value);
+            }
+        }
+    }
+
+    pub fn root(&self) -> [u8; 32] {
+        match self {
+            ReferenceTree::Height26(tree) => tree.root(),
+            ReferenceTree::Height32(tree) => tree.root(),
+            ReferenceTree::Height40(tree) => tree.root(),
+        }
+    }
+}
+
 lazy_static! {
     pub static ref HIGHEST_ADDRESS_PLUS_ONE: BigUint = BigUint::from_str(
         "452312848583266388373324160190187140051835877600158453279131187530910662655"
     )
     .unwrap();
+    pub static ref REFERENCE_TREE: SparseMerkleTree<HasherPoseidon, { DEFAULT_BATCH_ADDRESS_TREE_HEIGHT as usize }> =
+        SparseMerkleTree::<HasherPoseidon, { DEFAULT_BATCH_ADDRESS_TREE_HEIGHT as usize }>::new_empty();
+    pub static ref REFERENCE_TREES: Arc<Mutex<HashMap<Vec<u8>, ReferenceTree>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 }
 
 pub fn compute_range_node_hash(node: &indexed_trees::Model) -> Result<Hash, IngesterError> {
