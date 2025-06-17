@@ -81,9 +81,9 @@ solana-pubkey = "2.3.0"
 
 solana-transaction-status = "1.18.0"
 
-# light-concurrent-merkle-tree = "2.1.0"
-light-batched-merkle-tree = "0.3.0"
-# light-merkle-tree-metadata = "0.3.0"
+light-concurrent-merkle-tree = "2.1.0"
+# light-batched-merkle-tree = "0.3.0"
+light-merkle-tree-metadata = "0.3.0"
 # light-compressed-account = { version = "0.3.0", features = ["anchor"] }
 light-hasher = { version = "3.1.0" }
 
