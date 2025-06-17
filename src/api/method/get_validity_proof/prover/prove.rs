@@ -111,6 +111,9 @@ pub(crate) async fn generate_proof(
         PhotonApiError::UnexpectedError(format!("Error serializing prover request: {}", e))
     })?;
 
+    println!("Sending prove request to prover");
+    println!("Input: {}", json_body);
+
     let res = client
         .post(&prover_request_url)
         .body(json_body)
