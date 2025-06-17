@@ -90,7 +90,6 @@ pub async fn index_block_batch(
     for block in block_batch {
         state_updates.push(derive_block_state_update(block)?);
     }
-    println!("state_updates: {:?}", state_updates);
     persist::persist_state_update(&tx, StateUpdate::merge_updates(state_updates)).await?;
     metric! {
         statsd_count!("blocks_indexed", blocks_len as i64);
