@@ -11,6 +11,7 @@ use crate::{
     ingester::index_block_batch_with_infinite_retries,
 };
 
+use super::dump::BlockDumper;
 use super::typedefs::block_info::BlockInfo;
 const POST_BACKFILL_FREQUENCY: u64 = 10;
 const PRE_BACKFILL_FREQUENCY: u64 = 10;
@@ -53,6 +54,25 @@ pub async fn index_block_stream(
     last_indexed_slot_at_start: u64,
     end_slot: Option<u64>,
 ) {
+    index_block_stream_with_dumper(
+        block_stream,
+        db,
+        rpc_client,
+        last_indexed_slot_at_start,
+        end_slot,
+        None,
+    )
+    .await;
+}
+
+pub async fn index_block_stream_with_dumper(
+    block_stream: impl Stream<Item = Vec<BlockInfo>>,
+    db: Arc<DatabaseConnection>,
+    rpc_client: Arc<RpcClient>,
+    last_indexed_slot_at_start: u64,
+    end_slot: Option<u64>,
+    block_dumper: Option<Arc<BlockDumper>>,
+) {
     pin_mut!(block_stream);
     let current_slot =
         end_slot.unwrap_or(fetch_current_slot_with_infinite_retry(&rpc_client).await);
@@ -71,6 +91,14 @@ pub async fn index_block_stream(
 
     while let Some(blocks) = block_stream.next().await {
         let last_slot_in_block = blocks.last().unwrap().metadata.slot;
+
+        // Dump blocks if dumper is available
+        if let Some(ref dumper) = block_dumper {
+            if let Err(e) = dumper.add_blocks(blocks.clone()).await {
+                log::error!("Failed to dump blocks: {}", e);
+            }
+        }
+
         index_block_batch_with_infinite_retries(db.as_ref(), blocks).await;
 
         for slot in (last_indexed_slot + 1)..(last_slot_in_block + 1) {
@@ -93,6 +121,13 @@ pub async fn index_block_stream(
                 }
             }
             last_indexed_slot = slot;
+        }
+    }
+
+    // Flush any remaining blocks in the dumper
+    if let Some(ref dumper) = block_dumper {
+        if let Err(e) = dumper.flush().await {
+            log::error!("Failed to flush dumper: {}", e);
         }
     }
 }

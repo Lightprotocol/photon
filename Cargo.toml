@@ -33,6 +33,10 @@ path = "src/snapshot/loader/main.rs"
 name = "photon-tree-validator"
 path = "src/tools/tree_validator/main.rs"
 
+[[bin]]
+name = "photon-dump-manager"
+path = "src/tools/dump_manager/main.rs"
+
 [dependencies]
 ark-serialize = "0.5"
 ark-bn254 = "0.5"
@@ -112,6 +116,7 @@ num-traits = "0.2.18"
 num_enum = "0.7.2"
 reqwest = { version = "0.12.4", features = ["stream"] }
 tokio = { version = "1.43.0", features = ["full"] }
+env_logger = "0.10.0"
 tower = { version = "0.4.13", features = ["full"] }
 tower-http = { version = "0.3.5", features = ["full"] }
 tracing = "0.1.41"
@@ -138,6 +143,7 @@ rust-s3 = "0.34.0"
 function_name = "0.3.0"
 serial_test = "2.0.0"
 light-merkle-tree-reference = "2.0.0"
+tempfile = "3.8.0"
 
 [profile.dev]
 # Do not produce debug info for ~40% faster incremental compilation.

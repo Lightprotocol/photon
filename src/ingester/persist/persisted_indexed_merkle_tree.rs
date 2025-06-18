@@ -1,7 +1,10 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    fs::File,
+    io::Write,
     str::FromStr,
     sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use ark_bn254::Fr;
@@ -17,6 +20,7 @@ use sea_orm::{
     sea_query::OnConflict, ActiveValue, ColumnTrait, ConnectionTrait, DatabaseBackend,
     DatabaseTransaction, EntityTrait, QueryFilter, QueryTrait, Set, Statement, TransactionTrait,
 };
+use serde::{Deserialize, Serialize};
 use solana_pubkey::Pubkey;
 
 use super::{
@@ -38,17 +42,46 @@ use light_poseidon::PoseidonBytesHasher;
 
 #[derive(Clone)]
 pub enum ReferenceTree {
-    Height26(SparseMerkleTree<HasherPoseidon, 26>),
-    Height32(SparseMerkleTree<HasherPoseidon, 32>),
-    Height40(SparseMerkleTree<HasherPoseidon, 40>),
+    Height26(SparseMerkleTree<HasherPoseidon, 26>, Vec<[u8; 32]>), // (tree, leaf_values)
+    Height32(SparseMerkleTree<HasherPoseidon, 32>, Vec<[u8; 32]>), // (tree, leaf_values)
+    Height40(SparseMerkleTree<HasherPoseidon, 40>, Vec<[u8; 32]>), // (tree, leaf_values)
+}
+
+/// Serializable representation of a ReferenceTree that can be saved to disk
+/// for debugging purposes. This includes all leaf values to allow full reconstruction
+/// of the tree state.
+#[derive(Serialize, Deserialize)]
+pub struct SerializableReferenceTreeData {
+    pub height: u32,
+    pub root: [u8; 32],
+    pub root_hex: String,
+    pub leaf_count: usize,
+    pub timestamp: String,
+    pub timestamp_readable: String,
+    pub tree_pubkey: String,
+    pub tree_pubkey_base58: String,
+    pub tree_type: String,
+    /// All leaf values in the order they were appended to the tree
+    pub leaf_values: Vec<[u8; 32]>,
+    /// Hex-encoded versions of leaf values for easier debugging
+    pub leaf_values_hex: Vec<String>,
 }
 
 impl ReferenceTree {
     pub fn new_empty(height: u32) -> Result<Self, IngesterError> {
         match height {
-            26 => Ok(ReferenceTree::Height26(SparseMerkleTree::new_empty())),
-            32 => Ok(ReferenceTree::Height32(SparseMerkleTree::new_empty())),
-            40 => Ok(ReferenceTree::Height40(SparseMerkleTree::new_empty())),
+            26 => Ok(ReferenceTree::Height26(
+                SparseMerkleTree::new_empty(),
+                Vec::new(),
+            )),
+            32 => Ok(ReferenceTree::Height32(
+                SparseMerkleTree::new_empty(),
+                Vec::new(),
+            )),
+            40 => Ok(ReferenceTree::Height40(
+                SparseMerkleTree::new_empty(),
+                Vec::new(),
+            )),
             _ => Err(IngesterError::DatabaseError(format!(
                 "Unsupported tree height: {}",
                 height
@@ -58,24 +91,178 @@ impl ReferenceTree {
 
     pub fn append(&mut self, value: [u8; 32]) {
         match self {
-            ReferenceTree::Height26(tree) => {
+            ReferenceTree::Height26(tree, leaf_values) => {
                 let _proof = tree.append(value);
+                leaf_values.push(value);
             }
-            ReferenceTree::Height32(tree) => {
+            ReferenceTree::Height32(tree, leaf_values) => {
                 let _proof = tree.append(value);
+                leaf_values.push(value);
             }
-            ReferenceTree::Height40(tree) => {
+            ReferenceTree::Height40(tree, leaf_values) => {
                 let _proof = tree.append(value);
+                leaf_values.push(value);
             }
         }
     }
 
     pub fn root(&self) -> [u8; 32] {
         match self {
-            ReferenceTree::Height26(tree) => tree.root(),
-            ReferenceTree::Height32(tree) => tree.root(),
-            ReferenceTree::Height40(tree) => tree.root(),
+            ReferenceTree::Height26(tree, _) => tree.root(),
+            ReferenceTree::Height32(tree, _) => tree.root(),
+            ReferenceTree::Height40(tree, _) => tree.root(),
         }
+    }
+
+    pub fn height(&self) -> u32 {
+        match self {
+            ReferenceTree::Height26(_, _) => 26,
+            ReferenceTree::Height32(_, _) => 32,
+            ReferenceTree::Height40(_, _) => 40,
+        }
+    }
+
+    pub fn leaf_count(&self) -> usize {
+        match self {
+            ReferenceTree::Height26(_, leaf_values) => leaf_values.len(),
+            ReferenceTree::Height32(_, leaf_values) => leaf_values.len(),
+            ReferenceTree::Height40(_, leaf_values) => leaf_values.len(),
+        }
+    }
+
+    pub fn get_leaf_values(&self) -> &Vec<[u8; 32]> {
+        match self {
+            ReferenceTree::Height26(_, leaf_values) => leaf_values,
+            ReferenceTree::Height32(_, leaf_values) => leaf_values,
+            ReferenceTree::Height40(_, leaf_values) => leaf_values,
+        }
+    }
+
+    /// Serializes the complete reference tree state to a JSON file.
+    /// This includes all leaf values, allowing the tree to be reconstructed
+    /// later for debugging purposes when root mismatches occur.
+    pub fn serialize_to_file(
+        &self,
+        tree_pubkey: &[u8],
+        file_path: &str,
+    ) -> Result<(), IngesterError> {
+        let root = self.root();
+        let timestamp_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let tree_pubkey_base58 = if tree_pubkey.len() == 32 {
+            let pubkey = Pubkey::try_from(tree_pubkey)
+                .map(|p| p.to_string())
+                .unwrap_or_else(|_| "invalid_pubkey".to_string());
+            pubkey
+        } else {
+            "invalid_pubkey_length".to_string()
+        };
+
+        let leaf_values = self.get_leaf_values().clone();
+        let leaf_values_hex: Vec<String> =
+            leaf_values.iter().map(|leaf| hex::encode(leaf)).collect();
+
+        let tree_data = SerializableReferenceTreeData {
+            height: self.height(),
+            root,
+            root_hex: hex::encode(root),
+            leaf_count: self.leaf_count(),
+            timestamp: timestamp_secs.to_string(),
+            timestamp_readable: format!("Unix timestamp: {} seconds since epoch", timestamp_secs),
+            tree_pubkey: hex::encode(tree_pubkey),
+            tree_pubkey_base58,
+            tree_type: format!("SparseMerkleTree<HasherPoseidon, {}>", self.height()),
+            leaf_values,
+            leaf_values_hex,
+        };
+
+        let json_data = serde_json::to_string_pretty(&tree_data).map_err(|e| {
+            IngesterError::DatabaseError(format!("Failed to serialize reference tree: {}", e))
+        })?;
+
+        let mut file = File::create(file_path).map_err(|e| {
+            IngesterError::DatabaseError(format!("Failed to create file {}: {}", file_path, e))
+        })?;
+
+        file.write_all(json_data.as_bytes()).map_err(|e| {
+            IngesterError::DatabaseError(format!("Failed to write to file {}: {}", file_path, e))
+        })?;
+
+        info!(
+            "Reference tree serialized to file: {} with {} leaves",
+            file_path,
+            self.leaf_count()
+        );
+        Ok(())
+    }
+
+    /// Reconstructs a ReferenceTree from serialized data.
+    /// This rebuilds the tree by appending all leaf values in order
+    /// and verifies that the resulting root matches the expected root.
+    pub fn from_serialized_data(
+        data: SerializableReferenceTreeData,
+    ) -> Result<Self, IngesterError> {
+        let mut tree = Self::new_empty(data.height)?;
+
+        // Rebuild the tree by appending all leaf values in order
+        for leaf_value in data.leaf_values {
+            tree.append(leaf_value);
+        }
+
+        // Verify the root matches
+        if tree.root() != data.root {
+            return Err(IngesterError::DatabaseError(format!(
+                "Deserialized tree root mismatch: expected {:?}, got {:?}",
+                data.root,
+                tree.root()
+            )));
+        }
+
+        Ok(tree)
+    }
+
+    /// Loads and reconstructs a ReferenceTree from a JSON file created by serialize_to_file.
+    /// This is useful for debugging root mismatch issues by recreating the exact
+    /// tree state that caused the problem.
+    pub fn load_from_file(file_path: &str) -> Result<Self, IngesterError> {
+        let file_content = std::fs::read_to_string(file_path).map_err(|e| {
+            IngesterError::DatabaseError(format!("Failed to read file {}: {}", file_path, e))
+        })?;
+
+        let data: SerializableReferenceTreeData =
+            serde_json::from_str(&file_content).map_err(|e| {
+                IngesterError::DatabaseError(format!(
+                    "Failed to parse JSON from file {}: {}",
+                    file_path, e
+                ))
+            })?;
+
+        Self::from_serialized_data(data)
+    }
+
+    /// Validates this tree against a previously serialized tree from a file.
+    /// Returns true if both trees have the same root and leaf values.
+    pub fn validate_against_serialized_file(&self, file_path: &str) -> Result<bool, IngesterError> {
+        let other_tree = Self::load_from_file(file_path)?;
+        Ok(self.root() == other_tree.root()
+            && self.get_leaf_values() == other_tree.get_leaf_values())
+    }
+
+    /// Returns a debug string representation of the tree with key information.
+    pub fn get_debug_info(&self) -> String {
+        format!(
+            "ReferenceTree {{ height: {}, leaf_count: {}, root: {:?}, leaves: {:?} }}",
+            self.height(),
+            self.leaf_count(),
+            hex::encode(self.root()),
+            self.get_leaf_values()
+                .iter()
+                .map(|leaf| hex::encode(leaf))
+                .collect::<Vec<_>>()
+        )
     }
 }
 

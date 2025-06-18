@@ -42,7 +42,9 @@ pub use merkle_proof_with_context::MerkleProofWithContext;
 mod leaf_node;
 mod leaf_node_proof;
 
-pub use self::leaf_node::{persist_leaf_nodes, LeafNode, TREE_HEIGHT_V1};
+pub use self::leaf_node::{
+    persist_leaf_nodes, persist_leaf_nodes_with_signatures, LeafNode, TREE_HEIGHT_V1,
+};
 pub use self::leaf_node_proof::{
     get_multiple_compressed_leaf_proofs, get_multiple_compressed_leaf_proofs_by_indices,
     get_multiple_compressed_leaf_proofs_from_full_leaf_info,
@@ -149,12 +151,16 @@ pub async fn persist_state_update(
     for chunk in leaf_nodes_with_signatures.chunks(MAX_SQL_INSERTS) {
         let chunk_vec = chunk.iter().cloned().collect_vec();
         persist_state_tree_history(txn, chunk_vec.clone()).await?;
-        let leaf_nodes_chunk = chunk_vec
-            .iter()
-            .map(|(leaf_node, _)| leaf_node.clone())
-            .collect_vec();
 
-        persist_leaf_nodes(txn, leaf_nodes_chunk, TREE_HEIGHT_V1 + 1).await?;
+        persist_leaf_nodes_with_signatures(
+            txn,
+            chunk_vec
+                .iter()
+                .map(|(leaf_node, signature)| (leaf_node.clone(), Some(*signature)))
+                .collect(),
+            TREE_HEIGHT_V1 + 1,
+        )
+        .await?;
     }
 
     let transactions_vec = transactions.into_iter().collect::<Vec<_>>();

@@ -5,7 +5,7 @@ use async_stream::stream;
 use clap::Parser;
 use futures::pin_mut;
 use jsonrpsee::server::ServerHandle;
-use log::{error, info};
+use log::{error, info, warn};
 use photon_indexer::api::{self, api::PhotonApi};
 
 use photon_indexer::common::{
@@ -13,9 +13,10 @@ use photon_indexer::common::{
     get_rpc_client, setup_logging, setup_metrics, setup_pg_pool, LoggingFormat,
 };
 
+use photon_indexer::ingester::dump::{BlockDumpLoader, BlockDumper, DumpConfig, DumpFormat};
 use photon_indexer::ingester::fetchers::BlockStreamConfig;
 use photon_indexer::ingester::indexer::{
-    fetch_last_indexed_slot_with_infinite_retry, index_block_stream,
+    fetch_last_indexed_slot_with_infinite_retry, index_block_stream, index_block_stream_with_dumper,
 };
 use photon_indexer::migration::{
     sea_orm::{DatabaseBackend, DatabaseConnection, SqlxPostgresConnector, SqlxSqliteConnector},
@@ -32,6 +33,7 @@ use sqlx::{
     SqlitePool,
 };
 use std::env::temp_dir;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Photon: a compressed transaction Solana indexer
@@ -52,7 +54,7 @@ struct Args {
     db_url: Option<String>,
 
     /// The start slot to begin indexing from. Defaults to the last indexed slot in the database plus
-    /// one.  
+    /// one.
     #[arg(short, long)]
     start_slot: Option<String>,
 
@@ -110,6 +112,34 @@ struct Args {
     /// If provided, metrics will be sent to the specified statsd server.
     #[arg(long, default_value = None)]
     metrics_endpoint: Option<String>,
+
+    /// Enable block dumping to files during indexing
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    enable_block_dump: bool,
+
+    /// Directory to store block dumps (defaults to ./block_dumps)
+    #[arg(long)]
+    dump_dir: Option<String>,
+
+    /// Maximum number of blocks per dump file
+    #[arg(long, default_value_t = 1000)]
+    blocks_per_dump_file: usize,
+
+    /// Dump file format (json or bincode)
+    #[arg(long, default_value = "json")]
+    dump_format: String,
+
+    /// Load blocks from dump directory instead of RPC (for reindexing)
+    #[arg(long)]
+    load_from_dumps: Option<String>,
+
+    /// Start slot for loading from dumps (optional)
+    #[arg(long)]
+    dump_start_slot: Option<u64>,
+
+    /// End slot for loading from dumps (optional)
+    #[arg(long)]
+    dump_end_slot: Option<u64>,
 }
 
 async fn start_api_server(
@@ -186,15 +216,17 @@ fn continously_index_new_blocks(
     db: Arc<DatabaseConnection>,
     rpc_client: Arc<RpcClient>,
     last_indexed_slot: u64,
+    block_dumper: Option<Arc<BlockDumper>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let block_stream = block_stream_config.load_block_stream();
-        index_block_stream(
+        index_block_stream_with_dumper(
             block_stream,
             db,
             rpc_client.clone(),
             last_indexed_slot,
             None,
+            block_dumper,
         )
         .await;
     })
@@ -243,6 +275,7 @@ async fn main() {
     let is_rpc_node_local = args.rpc_url.contains("127.0.0.1");
     let rpc_client = get_rpc_client(&args.rpc_url);
 
+    // Handle snapshot loading
     if let Some(snapshot_dir) = args.snapshot_dir {
         let directory_adapter = Arc::new(DirectoryAdapter::from_local_directory(snapshot_dir));
         let snapshot_files = get_snapshot_files_with_metadata(&directory_adapter)
@@ -271,6 +304,107 @@ async fn main() {
             )
             .await;
         }
+    }
+
+    // Handle loading from dump files
+    if let Some(dump_dir) = &args.load_from_dumps {
+        info!("Loading blocks from dump directory: {}", dump_dir);
+
+        let loader = match BlockDumpLoader::new(PathBuf::from(dump_dir)) {
+            Ok(loader) => loader,
+            Err(e) => {
+                error!("Failed to create dump loader: {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        let stats = loader.get_stats();
+        info!(
+            "Found {} dump files with {} total blocks",
+            stats.total_files, stats.total_blocks
+        );
+
+        if let Some((min_slot, max_slot)) = stats.slot_range {
+            info!("Dump files cover slot range: {} to {}", min_slot, max_slot);
+        }
+
+        // Validate dump files
+        match loader.validate_dump_files() {
+            Ok(validation) => {
+                if !validation.is_valid() {
+                    warn!("Dump file validation issues found:");
+                    if !validation.invalid_files.is_empty() {
+                        warn!("Invalid files: {:?}", validation.invalid_files);
+                    }
+                    if !validation.missing_slots.is_empty() {
+                        warn!("Missing slots: {:?}", validation.missing_slots.len());
+                    }
+                    if !validation.duplicate_slots.is_empty() {
+                        warn!("Duplicate slots: {:?}", validation.duplicate_slots.len());
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to validate dump files: {}", e);
+            }
+        }
+
+        // Create block stream from dumps
+        let block_stream = match (args.dump_start_slot, args.dump_end_slot) {
+            (Some(start_slot), Some(end_slot)) => {
+                info!(
+                    "Loading blocks from dumps in slot range: {} to {}",
+                    start_slot, end_slot
+                );
+                loader.create_block_stream_in_range(start_slot, end_slot)
+            }
+            (Some(start_slot), None) => {
+                // If only start slot is provided, use end slot as the maximum available
+                if let Some((_, max_slot)) = loader.get_total_slot_range() {
+                    info!(
+                        "Loading blocks from dumps starting from slot: {} to {}",
+                        start_slot, max_slot
+                    );
+                    loader.create_block_stream_in_range(start_slot, max_slot)
+                } else {
+                    info!("Loading all blocks from dumps (no slot range available)");
+                    loader.create_block_stream()
+                }
+            }
+            (None, Some(end_slot)) => {
+                // If only end slot is provided, use start slot as the minimum available
+                if let Some((min_slot, _)) = loader.get_total_slot_range() {
+                    info!(
+                        "Loading blocks from dumps from slot: {} to {}",
+                        min_slot, end_slot
+                    );
+                    loader.create_block_stream_in_range(min_slot, end_slot)
+                } else {
+                    info!("Loading all blocks from dumps (no slot range available)");
+                    loader.create_block_stream()
+                }
+            }
+            (None, None) => {
+                info!("Loading all blocks from dumps");
+                loader.create_block_stream()
+            }
+        };
+
+        // Determine the last indexed slot for dump loading
+        let last_indexed_slot = args.dump_start_slot.unwrap_or(0).saturating_sub(1);
+        let end_slot = args.dump_end_slot;
+
+        index_block_stream(
+            block_stream,
+            db_conn.clone(),
+            rpc_client.clone(),
+            last_indexed_slot,
+            end_slot,
+        )
+        .await;
+
+        info!("Finished loading blocks from dump files");
+        return; // Exit after loading from dumps
     }
 
     let (indexer_handle, monitor_handle) = match args.disable_indexing {
@@ -311,6 +445,46 @@ async fn main() {
                     .unwrap(),
             };
 
+            // Setup block dumper if enabled
+            let block_dumper = if args.enable_block_dump {
+                let dump_format = match args.dump_format.as_str() {
+                    "json" => DumpFormat::Json,
+                    "bincode" => DumpFormat::Bincode,
+                    _ => {
+                        error!(
+                            "Invalid dump format: {}. Use 'json' or 'bincode'",
+                            args.dump_format
+                        );
+                        std::process::exit(1);
+                    }
+                };
+
+                let dump_config = DumpConfig {
+                    dump_dir: PathBuf::from(
+                        args.dump_dir.unwrap_or_else(|| "./block_dumps".to_string()),
+                    ),
+                    blocks_per_file: args.blocks_per_dump_file,
+                    compress: false,
+                    format: dump_format,
+                };
+
+                match BlockDumper::new(dump_config) {
+                    Ok(dumper) => {
+                        info!(
+                            "Block dumping enabled to directory: {:?}",
+                            dumper.config.dump_dir
+                        );
+                        Some(Arc::new(dumper))
+                    }
+                    Err(e) => {
+                        error!("Failed to create block dumper: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+
             let block_stream_config = BlockStreamConfig {
                 rpc_client: rpc_client.clone(),
                 max_concurrent_block_fetches,
@@ -324,6 +498,7 @@ async fn main() {
                     db_conn.clone(),
                     rpc_client.clone(),
                     last_indexed_slot,
+                    block_dumper,
                 )),
                 Some(continously_monitor_photon(
                     db_conn.clone(),

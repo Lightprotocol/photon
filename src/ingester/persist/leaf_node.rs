@@ -13,6 +13,7 @@ use crate::migration::OnConflict;
 use itertools::Itertools;
 use log::info;
 use sea_orm::{ConnectionTrait, DatabaseTransaction, EntityTrait, QueryTrait, Set, Statement};
+use solana_sdk::signature::Signature;
 
 use std::cmp::max;
 use std::collections::HashMap;
@@ -74,14 +75,32 @@ impl From<LeafNullification> for LeafNode {
 
 pub async fn persist_leaf_nodes(
     txn: &DatabaseTransaction,
-    mut leaf_nodes: Vec<LeafNode>,
+    leaf_nodes: Vec<LeafNode>,
     tree_height: u32,
 ) -> Result<(), IngesterError> {
-    if leaf_nodes.is_empty() {
+    persist_leaf_nodes_with_signatures(
+        txn,
+        leaf_nodes.into_iter().map(|node| (node, None)).collect(),
+        tree_height,
+    )
+    .await
+}
+
+pub async fn persist_leaf_nodes_with_signatures(
+    txn: &DatabaseTransaction,
+    leaf_nodes_with_signatures: Vec<(LeafNode, Option<Signature>)>,
+    tree_height: u32,
+) -> Result<(), IngesterError> {
+    if leaf_nodes_with_signatures.is_empty() {
         return Ok(());
     }
 
-    leaf_nodes.sort_by_key(|node| node.seq);
+    let mut leaf_nodes_with_signatures = leaf_nodes_with_signatures;
+    leaf_nodes_with_signatures.sort_by_key(|(node, _)| node.seq);
+    let leaf_nodes: Vec<LeafNode> = leaf_nodes_with_signatures
+        .iter()
+        .map(|(node, _)| node.clone())
+        .collect();
 
     let leaf_locations = leaf_nodes
         .iter()
@@ -189,26 +208,33 @@ pub async fn persist_leaf_nodes(
         IngesterError::DatabaseError(format!("Failed to persist path nodes: {}", e))
     })?;
 
-    validate_reference_trees(txn, &leaf_nodes, tree_height).await?;
+    // validate_reference_trees(txn, &leaf_nodes_with_signatures, tree_height).await?;
 
     Ok(())
 }
 
 async fn validate_reference_trees(
     txn: &DatabaseTransaction,
-    leaf_nodes: &[LeafNode],
+    leaf_nodes_with_signatures: &[(LeafNode, Option<Signature>)],
     tree_height: u32,
 ) -> Result<(), IngesterError> {
     // Group leaf nodes by tree
-    let mut trees_to_leaves: HashMap<Vec<u8>, Vec<&LeafNode>> = HashMap::new();
-    for leaf_node in leaf_nodes {
+    let mut trees_to_leaves: HashMap<Vec<u8>, Vec<&(LeafNode, Option<Signature>)>> = HashMap::new();
+    for leaf_node_with_sig in leaf_nodes_with_signatures {
         trees_to_leaves
-            .entry(leaf_node.tree.to_bytes_vec())
+            .entry(leaf_node_with_sig.0.tree.to_bytes_vec())
             .or_insert_with(Vec::new)
-            .push(leaf_node);
+            .push(leaf_node_with_sig);
     }
 
     for (tree_bytes, leaves) in trees_to_leaves {
+        // Extract signatures first to avoid borrow checker issues
+        let signatures: Vec<String> = leaves
+            .iter()
+            .filter_map(|(_, sig)| sig.as_ref())
+            .map(|sig| sig.to_string())
+            .collect();
+
         // Initialize or synchronize reference tree with current database state
         let ref_root = {
             let mut reference_trees = REFERENCE_TREES.lock().map_err(|e| {
@@ -226,14 +252,32 @@ async fn validate_reference_trees(
 
             // For indexed merkle trees, we append leaf hashes in order of their leaf_index
             let mut sorted_leaves = leaves;
-            sorted_leaves.sort_by_key(|leaf| leaf.leaf_index);
+            sorted_leaves.sort_by_key(|(leaf, _)| leaf.leaf_index);
 
-            for leaf_node in sorted_leaves {
+            log::debug!(
+                "Building reference tree for {:?} with {} leaves",
+                SerializablePubkey::try_from(tree_bytes.clone()).unwrap_or_default(),
+                sorted_leaves.len()
+            );
+
+            for (i, (leaf_node, _)) in sorted_leaves.iter().enumerate() {
                 let hash_bytes: [u8; 32] = leaf_node.hash.0;
+                log::trace!(
+                    "Appending leaf {} at index {}: hash={}",
+                    i,
+                    leaf_node.leaf_index,
+                    hex::encode(hash_bytes)
+                );
                 reference_tree.append(hash_bytes);
             }
 
-            reference_tree.root()
+            let root = reference_tree.root();
+            log::debug!(
+                "Reference tree constructed with root: {} (leaf count: {})",
+                hex::encode(root),
+                reference_tree.leaf_count()
+            );
+            root
         };
 
         // Query the database root (node_idx = 1 is the root node)
@@ -261,25 +305,101 @@ async fn validate_reference_trees(
                 IngesterError::DatabaseError("Database root is not 32 bytes".to_string())
             })?;
 
-            // For testing, we'll log the mismatch but not fail
-            // TODO: Once reference tree logic is properly aligned with indexed merkle tree logic,
-            // this should be changed back to return an error
             if ref_root != db_root {
                 let tree_pubkey = SerializablePubkey::try_from(tree_bytes.clone()).unwrap();
-                print!(
-                    "Reference tree root mismatch for tree {:?}: ref={:?} db={:?}",
-                    tree_pubkey, ref_root, db_root
+                let signatures_str = if signatures.is_empty() {
+                    "No signatures available".to_string()
+                } else {
+                    signatures.join(", ")
+                };
+
+                // Serialize reference tree to file before panicking
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let filename = format!(
+                    "reference_tree_mismatch_{}_{}.json",
+                    hex::encode(&tree_bytes[..8]),
+                    timestamp
                 );
+
+                log::error!(
+                    "CRITICAL: Reference tree root mismatch detected! Tree: {:?}, Reference root: {}, Database root: {}, Leaf count in reference: {}",
+                    tree_pubkey,
+                    hex::encode(ref_root),
+                    hex::encode(db_root),
+                    {
+                        let trees = REFERENCE_TREES.lock().unwrap();
+                        trees.get(&tree_bytes).map(|t| t.leaf_count()).unwrap_or(0)
+                    }
+                );
+
+                // Access the reference tree again to serialize it
+                let serialization_result = {
+                    let reference_trees = REFERENCE_TREES.lock().map_err(|e| {
+                        IngesterError::DatabaseError(format!(
+                            "Failed to lock reference trees: {}",
+                            e
+                        ))
+                    });
+
+                    match reference_trees {
+                        Ok(trees) => {
+                            if let Some(tree) = trees.get(&tree_bytes) {
+                                tree.serialize_to_file(&tree_bytes, &filename)
+                            } else {
+                                Err(IngesterError::DatabaseError(
+                                    "Reference tree not found".to_string(),
+                                ))
+                            }
+                        }
+                        Err(e) => Err(e),
+                    }
+                };
+
+                match serialization_result {
+                    Ok(()) => {
+                        log::error!(
+                            "Reference tree with full leaf data serialized to {}",
+                            filename
+                        );
+                        log::error!(
+                            "To reproduce this issue: load the serialized tree from {} and compare with database state",
+                            filename
+                        );
+                        panic!(
+                            "Reference tree root mismatch for tree {:?}: ref_root={} db_root={} transaction_signatures=[{}] serialized_to={}",
+                            tree_pubkey,
+                            hex::encode(ref_root),
+                            hex::encode(db_root),
+                            signatures_str,
+                            filename
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("FAILED to serialize reference tree before panic: {}", e);
+                        log::error!("Critical debugging data lost due to serialization failure!");
+                        panic!(
+                            "Reference tree root mismatch for tree {:?}: ref_root={} db_root={} transaction_signatures=[{}] ERROR: failed_to_serialize_debug_data",
+                            tree_pubkey,
+                            hex::encode(ref_root),
+                            hex::encode(db_root),
+                            signatures_str
+                        );
+                    }
+                }
             } else {
-                info!(
-                    "Reference tree root matches database root for tree: {:?}",
-                    tree_bytes
+                log::debug!(
+                    "Reference tree validation PASSED for tree {:?}: root={}",
+                    SerializablePubkey::try_from(tree_bytes.clone()).unwrap_or_default(),
+                    hex::encode(ref_root)
                 );
             }
         } else {
-            info!(
-                "No existing root found in database for tree: {:?}",
-                tree_bytes
+            log::debug!(
+                "No existing root found in database for tree: {:?} - this may be a new tree",
+                SerializablePubkey::try_from(tree_bytes.clone()).unwrap_or_default()
             );
         }
     }

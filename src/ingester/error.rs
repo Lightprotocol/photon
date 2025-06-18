@@ -14,6 +14,10 @@ pub enum IngesterError {
     EmptyBatchEvent,
     #[error("Invalid event.")]
     InvalidEvent,
+    #[error("IO error: {0}")]
+    IoError(String),
+    #[error("Parse error: {0}")]
+    ParseError(String),
 }
 
 impl From<sea_orm::error::DbErr> for IngesterError {
