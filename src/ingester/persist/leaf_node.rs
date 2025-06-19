@@ -91,6 +91,21 @@ pub async fn persist_leaf_nodes_with_signatures(
     leaf_nodes_with_signatures: Vec<(LeafNode, Option<Signature>)>,
     tree_height: u32,
 ) -> Result<(), IngesterError> {
+    persist_leaf_nodes_with_signatures_and_validation(
+        txn,
+        leaf_nodes_with_signatures,
+        tree_height,
+        false,
+    )
+    .await
+}
+
+pub async fn persist_leaf_nodes_with_signatures_and_validation(
+    txn: &DatabaseTransaction,
+    leaf_nodes_with_signatures: Vec<(LeafNode, Option<Signature>)>,
+    tree_height: u32,
+    enable_validation: bool,
+) -> Result<(), IngesterError> {
     if leaf_nodes_with_signatures.is_empty() {
         return Ok(());
     }
@@ -208,7 +223,9 @@ pub async fn persist_leaf_nodes_with_signatures(
         IngesterError::DatabaseError(format!("Failed to persist path nodes: {}", e))
     })?;
 
-    // validate_reference_trees(txn, &leaf_nodes_with_signatures, tree_height).await?;
+    if enable_validation {
+        validate_reference_trees(txn, &leaf_nodes_with_signatures, tree_height).await?;
+    }
 
     Ok(())
 }
@@ -236,7 +253,7 @@ async fn validate_reference_trees(
             .collect();
 
         // Initialize or synchronize reference tree with current database state
-        let ref_root = {
+        let (ref_root, leaves_num) = {
             let mut reference_trees = REFERENCE_TREES.lock().map_err(|e| {
                 IngesterError::DatabaseError(format!("Failed to lock reference trees: {}", e))
             })?;
@@ -277,7 +294,7 @@ async fn validate_reference_trees(
                 hex::encode(root),
                 reference_tree.leaf_count()
             );
-            root
+            (root, reference_tree.leaf_count())
         };
 
         // Query the database root (node_idx = 1 is the root node)
@@ -391,9 +408,10 @@ async fn validate_reference_trees(
                 }
             } else {
                 log::debug!(
-                    "Reference tree validation PASSED for tree {:?}: root={}",
+                    "Reference tree validation PASSED for tree {:?}: root={}, # leaves={}",
                     SerializablePubkey::try_from(tree_bytes.clone()).unwrap_or_default(),
-                    hex::encode(ref_root)
+                    hex::encode(ref_root),
+                    leaves_num
                 );
             }
         } else {

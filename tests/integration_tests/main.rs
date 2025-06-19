@@ -8,5 +8,6 @@ mod e2e_tests;
 mod mock_tests;
 mod open_api_tests;
 mod prod_tests;
+mod reference_tree_validation_tests;
 mod snapshot_tests;
 mod utils;

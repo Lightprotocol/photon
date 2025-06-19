@@ -37,6 +37,10 @@ path = "src/tools/tree_validator/main.rs"
 name = "photon-dump-manager"
 path = "src/tools/dump_manager/main.rs"
 
+[[bin]]
+name = "photon-transaction-dumper"
+path = "src/tools/transaction_dumper/main.rs"
+
 [dependencies]
 ark-serialize = "0.5"
 ark-bn254 = "0.5"

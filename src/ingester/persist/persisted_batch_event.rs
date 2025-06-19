@@ -218,8 +218,6 @@ async fn persist_batch_address_append_event(
         .map(|(addr, _)| addr)
         .collect::<Vec<_>>();
 
-    println!("duplicates: {:?}", duplicates);
-
     // 1. Append the addresses to the indexed merkle tree.
     multi_append(
         txn,

@@ -43,7 +43,8 @@ mod leaf_node;
 mod leaf_node_proof;
 
 pub use self::leaf_node::{
-    persist_leaf_nodes, persist_leaf_nodes_with_signatures, LeafNode, TREE_HEIGHT_V1,
+    persist_leaf_nodes, persist_leaf_nodes_with_signatures,
+    persist_leaf_nodes_with_signatures_and_validation, LeafNode, TREE_HEIGHT_V1,
 };
 pub use self::leaf_node_proof::{
     get_multiple_compressed_leaf_proofs, get_multiple_compressed_leaf_proofs_by_indices,
@@ -64,7 +65,15 @@ pub async fn persist_state_update(
     txn: &DatabaseTransaction,
     state_update: StateUpdate,
 ) -> Result<(), IngesterError> {
-    if state_update == StateUpdate::default() {
+    persist_state_update_inner(txn, &mut state_update.clone(), false).await
+}
+
+pub async fn persist_state_update_inner(
+    txn: &DatabaseTransaction,
+    state_update: &mut StateUpdate,
+    enable_validation: bool,
+) -> Result<(), IngesterError> {
+    if *state_update == StateUpdate::default() {
         return Ok(());
     }
     let StateUpdate {
@@ -78,7 +87,7 @@ pub async fn persist_state_update(
         batch_nullify_context,
         batch_new_addresses,
         ..
-    } = state_update;
+    } = state_update.clone();
 
     let input_accounts_len = in_accounts.len();
     let output_accounts_len = out_accounts.len();
@@ -103,6 +112,7 @@ pub async fn persist_state_update(
     }
 
     debug!("Persisting spent accounts...");
+    let in_accounts_vec: Vec<Hash> = in_accounts.iter().cloned().collect();
     for chunk in in_accounts
         .into_iter()
         .collect::<Vec<_>>()
@@ -152,13 +162,14 @@ pub async fn persist_state_update(
         let chunk_vec = chunk.iter().cloned().collect_vec();
         persist_state_tree_history(txn, chunk_vec.clone()).await?;
 
-        persist_leaf_nodes_with_signatures(
+        persist_leaf_nodes_with_signatures_and_validation(
             txn,
             chunk_vec
                 .iter()
                 .map(|(leaf_node, signature)| (leaf_node.clone(), Some(*signature)))
                 .collect(),
             TREE_HEIGHT_V1 + 1,
+            enable_validation,
         )
         .await?;
     }
@@ -188,6 +199,7 @@ pub async fn persist_state_update(
 
     debug!("Persisting account transactions...");
     let account_transactions = account_transactions.into_iter().collect::<Vec<_>>();
+
     for chunk in account_transactions.chunks(MAX_SQL_INSERTS) {
         persist_account_transactions(txn, chunk).await?;
     }
@@ -414,7 +426,6 @@ async fn append_output_accounts(
     txn: &DatabaseTransaction,
     out_accounts: &[AccountWithContext],
 ) -> Result<(), IngesterError> {
-    println!("appending {} accounts", out_accounts.len());
     let mut account_models = Vec::new();
     let mut token_accounts = Vec::new();
     for account in out_accounts {
@@ -446,7 +457,6 @@ async fn append_output_accounts(
         });
 
         if let Some(token_data) = parse_token_data(&account.account)? {
-            println!("token data: {:?}", token_data);
             token_accounts.push(EnrichedTokenAccount {
                 token_data,
                 hash: account.account.hash.clone(),
@@ -471,7 +481,6 @@ async fn append_output_accounts(
         .await?;
 
         if !token_accounts.is_empty() {
-            println!("Persisting {} token accounts...", token_accounts.len());
             persist_token_accounts(txn, token_accounts).await?;
         }
     }
@@ -612,12 +621,15 @@ async fn persist_account_transactions(
                 .to_owned(),
             )
             .build(txn.get_database_backend());
-        txn.execute(query).await.map_err(|e| {
-            IngesterError::DatabaseError(format!(
+
+        let result = txn.execute(query).await;
+
+        if let Err(e) = result {
+            return Err(IngesterError::DatabaseError(format!(
                 "Failed to persist account transactions: {:?}. Error {}",
                 account_transactions, e
-            ))
-        })?;
+            )));
+        }
     }
 
     Ok(())
