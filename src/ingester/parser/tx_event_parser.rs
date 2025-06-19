@@ -35,7 +35,7 @@ pub fn parse_public_transaction_event_v1(
                 e
             ))
         })?;
-        create_state_update_v1(tx.signature, slot, public_transaction_event.into()).map(Some)
+        create_state_update_v1(tx.signature, slot, public_transaction_event).map(Some)
     } else {
         Ok(None)
     }

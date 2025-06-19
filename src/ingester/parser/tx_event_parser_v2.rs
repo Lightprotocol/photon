@@ -125,7 +125,7 @@ pub fn create_state_update_v2(
     }
     let mut state_updates = Vec::new();
     for event in transaction_event.iter() {
-        let mut state_update_event = create_state_update_v1(tx, slot, event.clone().event.into())?;
+        let mut state_update_event = create_state_update_v1(tx, slot, event.clone().event)?;
 
         state_update_event
             .batch_nullify_context

@@ -206,24 +206,13 @@ async fn persist_batch_address_append_event(
         .map(|address| address.address.clone())
         .collect::<Vec<_>>();
 
-    // find duplicates in address_values
-    let duplicates = address_values
-        .iter()
-        .fold(HashMap::new(), |mut acc, addr| {
-            *acc.entry(addr).or_insert(0) += 1;
-            acc
-        })
-        .into_iter()
-        .filter(|(_, count)| *count > 1)
-        .map(|(addr, _)| addr)
-        .collect::<Vec<_>>();
-
     // 1. Append the addresses to the indexed merkle tree.
     multi_append(
         txn,
         address_values,
         batch_address_append_event.merkle_tree_pubkey.to_vec(),
         DEFAULT_BATCH_ADDRESS_TREE_HEIGHT + 1,
+        Some(batch_address_append_event.sequence_number as u32),
     )
     .await?;
 
