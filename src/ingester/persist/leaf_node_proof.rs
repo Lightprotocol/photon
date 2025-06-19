@@ -6,6 +6,7 @@ use crate::ingester::parser::tree_info::TreeInfo;
 use crate::ingester::persist::leaf_node::{leaf_index_to_node_index, LeafNode};
 use crate::ingester::persist::persisted_state_tree::{get_proof_nodes, get_proof_path, ZERO_BYTES};
 use crate::ingester::persist::MerkleProofWithContext;
+use log::debug;
 use sea_orm::QueryFilter;
 use sea_orm::{ColumnTrait, DatabaseTransaction, EntityTrait};
 use std::collections::HashMap;
@@ -195,6 +196,8 @@ pub async fn get_multiple_compressed_leaf_proofs_from_full_leaf_info(
             let root = proof.pop().ok_or(PhotonApiError::UnexpectedError(
                 "Root node not found in proof".to_string(),
             ))?;
+
+            debug!("root_seq: {:?}", root_seq);
 
             Ok(MerkleProofWithContext {
                 proof,
