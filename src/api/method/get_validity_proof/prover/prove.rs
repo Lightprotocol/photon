@@ -152,9 +152,9 @@ pub(crate) async fn generate_proof(
                 acc_proof.merkle_tree
             )))?
             .clone();
-        log::debug!("acc.proof.root_seq: {:?}", acc_proof.root_seq);
-        log::debug!("acc.proof.queue_size: {:?}", queue_size);
-        log::debug!(
+        println!("acc.proof.root_seq: {:?}", acc_proof.root_seq);
+        println!("acc.proof.queue_size: {:?}", queue_size);
+        println!(
             "acc_proof.root_seq % queue_size: {:?}",
             acc_proof.root_seq % queue_size
         );
