@@ -1,8 +1,9 @@
 use crate::utils::*;
 use function_name::named;
 use light_compressed_account::indexer_event::event::BatchNullifyContext;
-use light_merkle_tree_reference::MerkleTree;
+use light_compressed_account::TreeType;
 use light_hasher::Poseidon;
+use light_merkle_tree_reference::MerkleTree;
 use photon_indexer::common::typedefs::account::AccountData;
 use photon_indexer::common::typedefs::account::{Account, AccountContext, AccountWithContext};
 use photon_indexer::common::typedefs::bs64_string::Base64String;
@@ -75,7 +76,7 @@ impl Default for StateUpdateConfig {
     fn default() -> Self {
         Self {
             in_accounts: CollectionConfig::new(0, 5, 0.0),
-            out_accounts: CollectionConfig::new(0, 5, 1.0),
+            out_accounts: CollectionConfig::new(1, 5, 1.0),
             account_transactions: CollectionConfig::new(0, 3, 0.0),
             transactions: CollectionConfig::new(0, 2, 0.0),
             leaf_nullifications: CollectionConfig::new(0, 3, 0.0),
@@ -151,7 +152,11 @@ fn get_rnd_state_update(
                     seq: Some(UnsignedInteger(base_seq + i as u64)),
                     slot_created: UnsignedInteger(slot),
                 },
-                context: AccountContext::default(),
+                context: AccountContext {
+                    tree_type: TreeType::StateV1 as u16,
+                    queue: tree_info.queue.into(),
+                    ..Default::default()
+                },
             };
             state_update.out_accounts.push(account);
         }
@@ -381,67 +386,106 @@ async fn assert_state_tree_root(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use photon_indexer::dao::generated::state_trees;
     use sea_orm::ColumnTrait;
-
     if state_update.out_accounts.is_empty() {
         println!("✅ No output accounts - skipping state tree root verification");
         return Ok(());
     }
 
     // Get the tree pubkey from the first output account (all should use same tree)
-    let tree_pubkey_bytes = state_update.out_accounts[0].account.tree.0.to_bytes().to_vec();
+    let tree_pubkey_bytes = state_update.out_accounts[0]
+        .account
+        .tree
+        .0
+        .to_bytes()
+        .to_vec();
 
-    // Append all new account hashes to reference tree
+    println!("Output Account Hashes:");
     for account_with_context in &state_update.out_accounts {
-        let account_hash_bytes = account_with_context.account.hash.0.to_vec();
-        let mut hash_array = [0u8; 32];
-        hash_array.copy_from_slice(&account_hash_bytes);
-        reference_tree.append(&hash_array)?;
+        let account_hash = hex::encode(&account_with_context.account.hash.0);
+        let leaf_index = account_with_context.account.leaf_index.0;
+        println!("  Hash({}) at leaf_index {}", account_hash, leaf_index);
     }
 
-    // Get reference tree root
-    let reference_root = reference_tree.root();
+    // First, get all leaf nodes from database to verify they match our output accounts
+    let leaf_nodes = state_trees::Entity::find()
+        .filter(state_trees::Column::Tree.eq(tree_pubkey_bytes.clone()))
+        .filter(state_trees::Column::Level.eq(0i64))  // Leaf level
+        .all(db_conn)
+        .await?;
 
-    // First, let's see what nodes are actually in the state_trees table
+    println!("Database Leaf Hashes:");
+    for leaf in &leaf_nodes {
+        println!("  Hash({}) at leaf_idx={:?}", hex::encode(&leaf.hash), leaf.leaf_idx);
+    }
+
+    // Assert that all our new account hashes are present as leaf nodes in the database
+    for account_with_context in &state_update.out_accounts {
+        let account_hash = hex::encode(&account_with_context.account.hash.0);
+        let leaf_index = account_with_context.account.leaf_index.0;
+        
+        let found_leaf = leaf_nodes.iter().find(|leaf| {
+            leaf.leaf_idx == Some(leaf_index as i64) && 
+            hex::encode(&leaf.hash) == account_hash
+        });
+        
+        assert!(found_leaf.is_some(), 
+            "Account hash {} at leaf_index {} not found in database leaf nodes", 
+            account_hash, leaf_index);
+    }
+    println!("✅ All account hashes verified as leaf nodes in database");
+
+    // Construct reference tree from output accounts directly
+    // Find the maximum leaf index to determine tree size needed
+    let max_leaf_idx = state_update.out_accounts
+        .iter()
+        .map(|acc| acc.account.leaf_index.0)
+        .max()
+        .unwrap_or(0);
+        
+    println!("Constructing reference tree up to leaf index {}", max_leaf_idx);
+    
+    // Append leaves to reference tree in the correct positions
+    // Fill with zero hashes for missing leaves, actual account hashes for present ones
+    for i in 0..=max_leaf_idx {
+        let leaf_hash = state_update.out_accounts
+            .iter()
+            .find(|acc| acc.account.leaf_index.0 == i)
+            .map(|acc| acc.account.hash.0)
+            .unwrap_or([0u8; 32]); // Zero hash for missing leaves
+            
+        reference_tree.append(&leaf_hash)?;
+    }
+
+    // Get reference tree root after construction
+    let reference_root = reference_tree.root();
+    println!("Reference tree root: {}", hex::encode(&reference_root));
+
+    // Get database root node for comparison
     let all_nodes = state_trees::Entity::find()
         .filter(state_trees::Column::Tree.eq(tree_pubkey_bytes.clone()))
         .all(db_conn)
         .await?;
 
-    println!("All nodes in state_trees table for tree {:?}:", hex::encode(&tree_pubkey_bytes));
-    for node in &all_nodes {
-        println!("  node_idx: {}, level: {}, leaf_idx: {:?}, seq: {:?}, hash: {:?}", 
-                 node.node_idx, node.level, node.leaf_idx, node.seq, hex::encode(&node.hash));
-    }
-
-    if all_nodes.is_empty() {
-        println!("✅ No state tree nodes found - this might be expected for the test configuration");
-        return Ok(());
-    }
-
-    // Find the root node (highest level)
     let max_level = all_nodes.iter().map(|node| node.level).max().unwrap_or(0);
-    let root_nodes: Vec<_> = all_nodes.iter().filter(|node| node.level == max_level).collect();
+    let root_nodes: Vec<_> = all_nodes
+        .iter()
+        .filter(|node| node.level == max_level)
+        .collect();
 
-    if root_nodes.len() != 1 {
-        println!("⚠️ Multiple or no root nodes found at level {}: {:?}", max_level, root_nodes.len());
-        // For now, just skip the root verification
-        return Ok(());
-    }
-
+    assert_eq!(root_nodes.len(), 1, "Expected exactly 1 root node, found {}", root_nodes.len());
+    
     let root_node = root_nodes[0];
     let mut db_root_array = [0u8; 32];
     db_root_array.copy_from_slice(&root_node.hash);
+    println!("Database root: {}", hex::encode(&db_root_array));
 
     assert_eq!(
         reference_root, db_root_array,
-        "State tree root mismatch!\nReference: {:?}\nDatabase:  {:?}",
-        reference_root, db_root_array
+        "State tree root mismatch!\nReference: {}\nDatabase:  {}",
+        hex::encode(&reference_root), hex::encode(&db_root_array)
     );
-
-    println!(
-        "✅ Successfully verified state tree root matches reference implementation"
-    );
-    println!("Tree root: {:?}", reference_root);
+    
+    println!("✅ State tree root verification successful!");
 
     Ok(())
 }
@@ -523,10 +567,10 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     let mut rng = StdRng::seed_from_u64(seed);
 
     // Initialize reference Merkle tree for state tree root verification
-    let tree_info = TreeInfo::get(TEST_TREE_PUBKEY_STR)
-        .expect("Test tree should exist in QUEUE_TREE_MAPPING");
+    let tree_info =
+        TreeInfo::get(TEST_TREE_PUBKEY_STR).expect("Test tree should exist in QUEUE_TREE_MAPPING");
     let tree_height = tree_info.height as usize;
-    let mut reference_tree = MerkleTree::<Poseidon>::new(tree_height, 0);
+    let mut reference_tree = MerkleTree::<Poseidon>::new(26, 0);
 
     // Test that the new config structure works correctly
     let config = StateUpdateConfig::default();
@@ -536,7 +580,7 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     assert_eq!(config.in_accounts.max_entries, 5);
     assert_eq!(config.in_accounts.probability, 0.0);
 
-    assert_eq!(config.out_accounts.min_entries, 0);
+    assert_eq!(config.out_accounts.min_entries, 1);
     assert_eq!(config.out_accounts.max_entries, 5);
     assert_eq!(config.out_accounts.probability, 1.0);
 
