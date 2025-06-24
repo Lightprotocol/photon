@@ -1,23 +1,33 @@
 use crate::utils::*;
 use function_name::named;
-use photon_indexer::common::typedefs::account::{Account, AccountContext, AccountWithContext};
+use light_compressed_account::indexer_event::event::BatchNullifyContext;
 use photon_indexer::common::typedefs::account::AccountData;
+use photon_indexer::common::typedefs::account::{Account, AccountContext, AccountWithContext};
 use photon_indexer::common::typedefs::bs64_string::Base64String;
 use photon_indexer::common::typedefs::hash::Hash;
 use photon_indexer::common::typedefs::serializable_pubkey::SerializablePubkey;
 use photon_indexer::common::typedefs::unsigned_integer::UnsignedInteger;
 use photon_indexer::ingester::parser::indexer_events::RawIndexedElement;
 use photon_indexer::ingester::parser::state_update::{
-    AccountTransaction, AddressQueueUpdate, IndexedTreeLeafUpdate, LeafNullification, StateUpdate, Transaction
+    AccountTransaction, AddressQueueUpdate, IndexedTreeLeafUpdate, LeafNullification, StateUpdate,
+    Transaction,
 };
+use photon_indexer::ingester::parser::tree_info::TreeInfo;
 use photon_indexer::ingester::persist::persist_state_update;
-use light_compressed_account::indexer_event::event::BatchNullifyContext;
-use rand::{rngs::{StdRng, ThreadRng}, Rng, RngCore, SeedableRng};
-use sea_orm::{DatabaseConnection, EntityTrait, PaginatorTrait, TransactionTrait};
+use rand::{
+    rngs::{StdRng, ThreadRng},
+    Rng, RngCore, SeedableRng,
+};
+use sea_orm::{
+    prelude::Decimal, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    TransactionTrait,
+};
 use serial_test::serial;
-use solana_pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use std::env;
+
+// Use the specific tree from QUEUE_TREE_MAPPING
+const TEST_TREE_PUBKEY_STR: &str = "smt1NamzXdq4AMqS2fS2F1i5KTYPZRhoHgWx38d8WsT";
 
 /// Configuration for generating random collections
 #[derive(Debug, Clone)]
@@ -49,16 +59,12 @@ pub struct StateUpdateConfig {
     pub indexed_merkle_tree_updates: CollectionConfig,
     pub batch_nullify_context: CollectionConfig,
     pub batch_new_addresses: CollectionConfig,
-    
+
     // Value ranges for various types
     pub lamports_min: u64,
     pub lamports_max: u64,
-    pub slot_min: u64,
-    pub slot_max: u64,
-    pub seq_min: u64,
-    pub seq_max: u64,
-    pub leaf_index_min: u64,
-    pub leaf_index_max: u64,
+    pub discriminator_min: u64,
+    pub discriminator_max: u64,
     pub data_size_min: usize,
     pub data_size_max: usize,
 }
@@ -66,23 +72,19 @@ pub struct StateUpdateConfig {
 impl Default for StateUpdateConfig {
     fn default() -> Self {
         Self {
-            in_accounts: CollectionConfig::new(0, 5, 0.7),
-            out_accounts: CollectionConfig::new(0, 5, 0.8),
-            account_transactions: CollectionConfig::new(0, 3, 0.6),
-            transactions: CollectionConfig::new(0, 2, 0.9),
-            leaf_nullifications: CollectionConfig::new(0, 3, 0.5),
-            indexed_merkle_tree_updates: CollectionConfig::new(0, 3, 0.4),
-            batch_nullify_context: CollectionConfig::new(0, 2, 0.3),
-            batch_new_addresses: CollectionConfig::new(0, 3, 0.6),
-            
+            in_accounts: CollectionConfig::new(0, 5, 0.0),
+            out_accounts: CollectionConfig::new(0, 5, 1.0),
+            account_transactions: CollectionConfig::new(0, 3, 0.0),
+            transactions: CollectionConfig::new(0, 2, 0.0),
+            leaf_nullifications: CollectionConfig::new(0, 3, 0.0),
+            indexed_merkle_tree_updates: CollectionConfig::new(0, 3, 0.0),
+            batch_nullify_context: CollectionConfig::new(0, 2, 0.0),
+            batch_new_addresses: CollectionConfig::new(0, 3, 0.0),
+
             lamports_min: 1000,
             lamports_max: 1_000_000,
-            slot_min: 0,
-            slot_max: 10_000,
-            seq_min: 0,
-            seq_max: 10_000,
-            leaf_index_min: 0,
-            leaf_index_max: 100,
+            discriminator_min: 1000,
+            discriminator_max: 1_000_000,
             data_size_min: 0,
             data_size_max: 100,
         }
@@ -90,137 +92,182 @@ impl Default for StateUpdateConfig {
 }
 
 /// Generate a random StateUpdate following the light-protocol pattern
-fn get_rnd_state_update(rng: &mut StdRng, config: &StateUpdateConfig) -> StateUpdate {
+fn get_rnd_state_update(
+    rng: &mut StdRng,
+    config: &StateUpdateConfig,
+    slot: u64,
+    base_seq: u64,
+    base_leaf_index: u64,
+) -> StateUpdate {
     let mut state_update = StateUpdate::default();
-    
+
+    // Get tree info from QUEUE_TREE_MAPPING
+    let tree_info =
+        TreeInfo::get(TEST_TREE_PUBKEY_STR).expect("Test tree should exist in QUEUE_TREE_MAPPING");
+    let test_tree_pubkey = tree_info.tree;
+
     // Generate in_accounts (HashSet<Hash>)
     if rng.gen_bool(config.in_accounts.probability) {
         let count = rng.gen_range(config.in_accounts.min_entries..=config.in_accounts.max_entries);
-        for _ in 0..count {
+        for _i in 0..count {
             state_update.in_accounts.insert(Hash::new_unique());
         }
     }
-    
+
     // Generate out_accounts (Vec<AccountWithContext>)
     if rng.gen_bool(config.out_accounts.probability) {
-        let count = rng.gen_range(config.out_accounts.min_entries..=config.out_accounts.max_entries);
-        for _ in 0..count {
+        let count =
+            rng.gen_range(config.out_accounts.min_entries..=config.out_accounts.max_entries);
+        for i in 0..count {
             let account = AccountWithContext {
                 account: Account {
                     hash: Hash::new_unique(),
-                    address: if rng.gen_bool(0.7) { Some(SerializablePubkey::new_unique()) } else { None },
+                    address: if rng.gen_bool(0.7) {
+                        Some(SerializablePubkey::new_unique())
+                    } else {
+                        None
+                    },
                     data: if rng.gen_bool(0.6) {
                         let data_size = rng.gen_range(config.data_size_min..=config.data_size_max);
                         Some(AccountData {
-                            discriminator: UnsignedInteger(rng.gen()),
+                            discriminator: UnsignedInteger(
+                                rng.gen_range(config.discriminator_min..=config.discriminator_max),
+                            ),
                             data: Base64String((0..data_size).map(|_| rng.gen()).collect()),
                             data_hash: Hash::new_unique(),
                         })
-                    } else { None },
+                    } else {
+                        None
+                    },
                     owner: SerializablePubkey::new_unique(),
-                    lamports: UnsignedInteger(rng.gen_range(config.lamports_min..=config.lamports_max)),
-                    tree: SerializablePubkey::new_unique(),
-                    leaf_index: UnsignedInteger(rng.gen_range(config.leaf_index_min..=config.leaf_index_max)),
-                    seq: Some(UnsignedInteger(rng.gen_range(config.seq_min..=config.seq_max))),
-                    slot_created: UnsignedInteger(rng.gen_range(config.slot_min..=config.slot_max)),
+                    lamports: UnsignedInteger(
+                        rng.gen_range(config.lamports_min as i64..=config.lamports_max as i64)
+                            as u64,
+                    ),
+                    tree: SerializablePubkey::from(test_tree_pubkey),
+                    leaf_index: UnsignedInteger(base_leaf_index + i as u64),
+                    seq: Some(UnsignedInteger(base_seq + i as u64)),
+                    slot_created: UnsignedInteger(slot),
                 },
                 context: AccountContext::default(),
             };
             state_update.out_accounts.push(account);
         }
     }
-    
+
     // Generate account_transactions (HashSet<AccountTransaction>)
     if rng.gen_bool(config.account_transactions.probability) {
-        let count = rng.gen_range(config.account_transactions.min_entries..=config.account_transactions.max_entries);
-        for _ in 0..count {
+        let count = rng.gen_range(
+            config.account_transactions.min_entries..=config.account_transactions.max_entries,
+        );
+        for _i in 0..count {
             let mut sig_bytes = [0u8; 64];
             rng.fill(&mut sig_bytes);
-            state_update.account_transactions.insert(AccountTransaction {
-                hash: Hash::new_unique(),
-                signature: Signature::from(sig_bytes),
-            });
+            state_update
+                .account_transactions
+                .insert(AccountTransaction {
+                    hash: Hash::new_unique(),
+                    signature: Signature::from(sig_bytes),
+                });
         }
     }
-    
+
     // Generate transactions (HashSet<Transaction>)
     if rng.gen_bool(config.transactions.probability) {
-        let count = rng.gen_range(config.transactions.min_entries..=config.transactions.max_entries);
-        for _ in 0..count {
+        let count =
+            rng.gen_range(config.transactions.min_entries..=config.transactions.max_entries);
+        for _i in 0..count {
             let mut sig_bytes = [0u8; 64];
             rng.fill(&mut sig_bytes);
             state_update.transactions.insert(Transaction {
                 signature: Signature::from(sig_bytes),
-                slot: rng.gen_range(config.slot_min..=config.slot_max),
+                slot,
                 uses_compression: rng.gen(),
-                error: if rng.gen_bool(0.1) { Some("Random error".to_string()) } else { None },
+                error: if rng.gen_bool(0.1) {
+                    Some("Random error".to_string())
+                } else {
+                    None
+                },
             });
         }
     }
-    
+
     // Generate leaf_nullifications (HashSet<LeafNullification>)
     if rng.gen_bool(config.leaf_nullifications.probability) {
-        let count = rng.gen_range(config.leaf_nullifications.min_entries..=config.leaf_nullifications.max_entries);
-        for _ in 0..count {
+        let count = rng.gen_range(
+            config.leaf_nullifications.min_entries..=config.leaf_nullifications.max_entries,
+        );
+        for i in 0..count {
             let mut sig_bytes = [0u8; 64];
             rng.fill(&mut sig_bytes);
             state_update.leaf_nullifications.insert(LeafNullification {
-                tree: Pubkey::new_unique(),
-                leaf_index: rng.gen_range(config.leaf_index_min..=config.leaf_index_max),
-                seq: rng.gen_range(config.seq_min..=config.seq_max),
+                tree: test_tree_pubkey,
+                leaf_index: base_leaf_index + i as u64,
+                seq: base_seq + i as u64,
                 signature: Signature::from(sig_bytes),
             });
         }
     }
-    
+
     // Generate indexed_merkle_tree_updates (HashMap<(Pubkey, u64), IndexedTreeLeafUpdate>)
     if rng.gen_bool(config.indexed_merkle_tree_updates.probability) {
-        let count = rng.gen_range(config.indexed_merkle_tree_updates.min_entries..=config.indexed_merkle_tree_updates.max_entries);
-        for _ in 0..count {
-            let tree = Pubkey::new_unique();
-            let index = rng.gen_range(config.leaf_index_min..=config.leaf_index_max);
+        let count = rng.gen_range(
+            config.indexed_merkle_tree_updates.min_entries
+                ..=config.indexed_merkle_tree_updates.max_entries,
+        );
+        for i in 0..count {
+            let tree = test_tree_pubkey;
+            let index = base_leaf_index + i as u64;
             let update = IndexedTreeLeafUpdate {
                 tree,
                 leaf: RawIndexedElement {
                     value: rng.gen::<[u8; 32]>(),
                     next_index: rng.gen::<u32>() as usize,
                     next_value: rng.gen::<[u8; 32]>(),
-                    index: rng.gen::<u32>() as usize,
+                    index: (base_leaf_index + i as u64) as usize,
                 },
                 hash: rng.gen::<[u8; 32]>(),
-                seq: rng.gen_range(config.seq_min..=config.seq_max),
+                seq: base_seq + i as u64,
             };
-            state_update.indexed_merkle_tree_updates.insert((tree, index), update);
+            state_update
+                .indexed_merkle_tree_updates
+                .insert((tree, index), update);
         }
     }
-    
+
     // Generate batch_nullify_context (Vec<BatchNullifyContext>)
     if rng.gen_bool(config.batch_nullify_context.probability) {
-        let count = rng.gen_range(config.batch_nullify_context.min_entries..=config.batch_nullify_context.max_entries);
-        for _ in 0..count {
-            state_update.batch_nullify_context.push(BatchNullifyContext {
-                tx_hash: rng.gen::<[u8; 32]>(),
-                account_hash: rng.gen::<[u8; 32]>(),
-                nullifier: rng.gen::<[u8; 32]>(),
-                nullifier_queue_index: rng.gen_range(0..=1000),
-            });
+        let count = rng.gen_range(
+            config.batch_nullify_context.min_entries..=config.batch_nullify_context.max_entries,
+        );
+        for i in 0..count {
+            state_update
+                .batch_nullify_context
+                .push(BatchNullifyContext {
+                    tx_hash: rng.gen::<[u8; 32]>(),
+                    account_hash: rng.gen::<[u8; 32]>(),
+                    nullifier: rng.gen::<[u8; 32]>(),
+                    nullifier_queue_index: i as u64,
+                });
         }
     }
-    
+
     // Generate batch_new_addresses (Vec<AddressQueueUpdate>)
     if rng.gen_bool(config.batch_new_addresses.probability) {
-        let count = rng.gen_range(config.batch_new_addresses.min_entries..=config.batch_new_addresses.max_entries);
-        for _ in 0..count {
+        let count = rng.gen_range(
+            config.batch_new_addresses.min_entries..=config.batch_new_addresses.max_entries,
+        );
+        for i in 0..count {
             state_update.batch_new_addresses.push(AddressQueueUpdate {
-                tree: SerializablePubkey::new_unique(),
+                tree: SerializablePubkey::from(test_tree_pubkey),
                 address: rng.gen::<[u8; 32]>(),
-                queue_index: rng.gen_range(0..=1000),
+                queue_index: i as u64,
             });
         }
     }
-    
+
     // Note: batch_merkle_tree_events is left as default since it's complex and rarely used
-    
+
     state_update
 }
 
@@ -235,6 +282,95 @@ async fn persist_state_update_and_commit(
     Ok(())
 }
 
+/// Assert that all output accounts from the state update were inserted correctly into the database
+async fn assert_output_accounts_persisted(
+    db_conn: &DatabaseConnection,
+    state_update: &StateUpdate,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use photon_indexer::dao::generated::accounts;
+    use sea_orm::ColumnTrait;
+
+    if state_update.out_accounts.is_empty() {
+        // If no accounts expected, verify table is empty
+        let account_count = accounts::Entity::find().count(db_conn).await?;
+        assert_eq!(
+            account_count, 0,
+            "Expected no accounts in database, but found {}",
+            account_count
+        );
+        return Ok(());
+    }
+
+    // Create expected models from state update
+    let expected_models: Vec<accounts::Model> = state_update
+        .out_accounts
+        .iter()
+        .map(|account_with_context| {
+            let account = &account_with_context.account;
+            let context = &account_with_context.context;
+            accounts::Model {
+                hash: account.hash.0.to_vec(),
+                data: account.data.as_ref().map(|data| data.data.0.clone()),
+                data_hash: account.data.as_ref().map(|data| data.data_hash.0.to_vec()),
+                address: account
+                    .address
+                    .as_ref()
+                    .map(|addr| addr.0.to_bytes().to_vec()),
+                owner: account.owner.0.to_bytes().to_vec(),
+                tree: account.tree.0.to_bytes().to_vec(),
+                leaf_index: account.leaf_index.0 as i64,
+                seq: account.seq.as_ref().map(|seq| seq.0 as i64),
+                slot_created: account.slot_created.0 as i64,
+                spent: false,     // Default value for new accounts (from persist logic)
+                prev_spent: None, // Default value
+                lamports: Decimal::from(account.lamports.0),
+                discriminator: account
+                    .data
+                    .as_ref()
+                    .map(|data| Decimal::from(data.discriminator.0)),
+                tree_type: Some(context.tree_type as i32), // From account context
+                nullified_in_tree: false, // Default value for new accounts (from persist logic)
+                nullifier_queue_index: None, // Default value
+                in_output_queue: context.in_output_queue, // From account context
+                queue: context.queue.0.to_bytes().to_vec(), // Use queue from account context
+                nullifier: None,          // Default value
+                tx_hash: None,            // Default value
+            }
+        })
+        .collect();
+
+    // Get all account hashes for the query
+    let expected_hashes: Vec<Vec<u8>> = expected_models
+        .iter()
+        .map(|model| model.hash.clone())
+        .collect();
+
+    // Query database for accounts with matching hashes
+    let mut db_accounts = accounts::Entity::find()
+        .filter(accounts::Column::Hash.is_in(expected_hashes))
+        .all(db_conn)
+        .await?;
+
+    // Sort both vectors by hash for consistent comparison
+    let mut expected_models_sorted = expected_models;
+    expected_models_sorted.sort_by(|a, b| a.hash.cmp(&b.hash));
+    db_accounts.sort_by(|a, b| a.hash.cmp(&b.hash));
+
+    // Single assert comparing the entire vectors
+    assert_eq!(
+        db_accounts, expected_models_sorted,
+        "Database accounts do not match expected accounts"
+    );
+
+    println!(
+        "✅ Successfully verified {} output accounts were persisted correctly",
+        db_accounts.len()
+    );
+    println!("Database accounts: {:?}", db_accounts);
+    println!("Expected accounts: {:?}", expected_models_sorted);
+    Ok(())
+}
+
 #[named]
 #[rstest]
 #[tokio::test]
@@ -245,16 +381,16 @@ async fn test_persist_empty_state_update(
     // Set required environment variables
     env::set_var("MAINNET_RPC_URL", "https://api.mainnet-beta.solana.com");
     env::set_var("DEVNET_RPC_URL", "https://api.devnet.solana.com");
-    
+
     // Set up deterministic randomness following the light-protocol pattern
     let mut thread_rng = ThreadRng::default();
     let random_seed = thread_rng.next_u64();
     let seed: u64 = random_seed; // Could optionally take seed as parameter
-    // Keep this print so that in case the test fails
-    // we can use the seed to reproduce the error.
+                                 // Keep this print so that in case the test fails
+                                 // we can use the seed to reproduce the error.
     println!("\n\npersist_state_update test seed {}\n\n", seed);
     let mut _rng = StdRng::seed_from_u64(seed);
-    
+
     let name = trim_test_name(function_name!());
     let setup = setup(name, db_backend).await;
 
@@ -296,31 +432,59 @@ async fn test_persist_empty_state_update(
 #[rstest]
 #[tokio::test]
 #[serial]
-async fn test_config_structure(
-    #[values(DatabaseBackend::Sqlite)] db_backend: DatabaseBackend,
-) {
+async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: DatabaseBackend) {
     // Set required environment variables
     env::set_var("MAINNET_RPC_URL", "https://api.mainnet-beta.solana.com");
     env::set_var("DEVNET_RPC_URL", "https://api.devnet.solana.com");
-    
+
     let name = trim_test_name(function_name!());
     let setup = setup(name, db_backend).await;
 
+    // Set up deterministic randomness following the light-protocol pattern
+    let mut thread_rng = ThreadRng::default();
+    let random_seed = thread_rng.next_u64();
+    let seed: u64 = random_seed;
+    println!("\n\nconfig structure test seed {}\n\n", seed);
+    let mut rng = StdRng::seed_from_u64(seed);
+
     // Test that the new config structure works correctly
     let config = StateUpdateConfig::default();
-    
+
     // Verify config structure values
     assert_eq!(config.in_accounts.min_entries, 0);
     assert_eq!(config.in_accounts.max_entries, 5);
-    assert_eq!(config.in_accounts.probability, 0.7);
-    
+    assert_eq!(config.in_accounts.probability, 0.0);
+
     assert_eq!(config.out_accounts.min_entries, 0);
     assert_eq!(config.out_accounts.max_entries, 5);
-    assert_eq!(config.out_accounts.probability, 0.8);
-    
+    assert_eq!(config.out_accounts.probability, 1.0);
+
     assert_eq!(config.transactions.min_entries, 0);
     assert_eq!(config.transactions.max_entries, 2);
-    assert_eq!(config.transactions.probability, 0.9);
-    
-    println!("Config structure test completed successfully - unified CollectionConfig approach working");
+    assert_eq!(config.transactions.probability, 0.0);
+
+    // Test that we can create a state update with incremental values
+    let slot = 1000;
+    let base_seq = 500;
+    let base_leaf_index = 100;
+    let simple_state_update =
+        get_rnd_state_update(&mut rng, &config, slot, base_seq, base_leaf_index);
+    println!("simple_state_update {:?}", simple_state_update);
+
+    // Persist the simple state update
+    let result = persist_state_update_and_commit(&setup.db_conn, simple_state_update.clone()).await;
+
+    // Should complete successfully
+    assert!(
+        result.is_ok(),
+        "Failed to persist simple state update: {:?}",
+        result.err()
+    );
+
+    // Assert that all output accounts were persisted correctly
+    assert_output_accounts_persisted(&setup.db_conn, &simple_state_update)
+        .await
+        .expect("Failed to verify output accounts persistence");
+
+    println!("Config structure test completed successfully - unified CollectionConfig approach with incremental slot/seq/leaf_index working");
 }
