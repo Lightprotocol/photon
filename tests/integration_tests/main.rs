@@ -7,6 +7,7 @@ mod batched_state_tree_tests;
 mod e2e_tests;
 mod mock_tests;
 mod open_api_tests;
+mod persist_state_update_test;
 mod prod_tests;
 mod snapshot_tests;
 mod utils;

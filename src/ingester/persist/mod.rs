@@ -65,7 +65,9 @@ pub async fn persist_state_update(
         return Ok(());
     }
     let StateUpdate {
+        // input accounts that will be nullified
         in_accounts,
+        // Output accounts that will be created
         out_accounts,
         account_transactions,
         transactions,
