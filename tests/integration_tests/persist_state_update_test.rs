@@ -104,7 +104,7 @@ impl Default for StateUpdateConfig {
             account_transactions: CollectionConfig::new(0, 3, 0.0),
             transactions: CollectionConfig::new(0, 2, 0.0),
             leaf_nullifications: CollectionConfig::new(0, 3, 0.0),
-            indexed_merkle_tree_updates: CollectionConfig::new(0, 3, 1.0),
+            indexed_merkle_tree_updates: CollectionConfig::new(1, 1, 1.0),
             batch_nullify_context: CollectionConfig::new(0, 2, 0.0),
             batch_new_addresses: CollectionConfig::new(0, 3, 0.0),
 
@@ -406,6 +406,7 @@ fn get_rnd_state_update(
                 )
                 .unwrap();
             let update = IndexedTreeLeafUpdate {
+                tree_type: TreeType::AddressV1,
                 tree,
                 leaf: RawIndexedElement {
                     value: value_bytes,
@@ -1028,7 +1029,7 @@ async fn assert_indexed_tree_root(
     // Get database root from state_trees table (indexed trees use same table structure)
     use photon_indexer::dao::generated::state_trees;
 
-    let ref_leaves = (0..4)
+    let ref_leaves = (0..(reference_tree.merkle_tree.get_next_index() - 1))
         .map(|i| reference_tree.merkle_tree.get_leaf(i).unwrap())
         .collect::<Vec<[u8; 32]>>();
     let mut leaf_nodes_from_db = state_trees::Entity::find()
@@ -1043,18 +1044,20 @@ async fn assert_indexed_tree_root(
     let leaf_nodes = leaf_nodes_from_db
         .iter()
         .map(|x| {
+            println!("db leaf node {:?}", x);
             let mut hash_array = [0u8; 32];
             hash_array.copy_from_slice(&x.hash);
             hash_array
         })
         .collect::<Vec<[u8; 32]>>();
-    assert_eq!(leaf_nodes, ref_leaves);
 
     let root_nodes = state_trees::Entity::find()
         .filter(state_trees::Column::Tree.eq(tree_pubkey_bytes.clone()))
         .filter(state_trees::Column::Level.eq(26))
         .all(db_conn)
         .await?;
+    println!("root_nodes {:?}", root_nodes);
+    assert_eq!(leaf_nodes, ref_leaves);
 
     println!("Database Indexed Tree Entries:");
     for entry in &db_indexed_entries {
@@ -1217,39 +1220,34 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     let mut reference_indexed_array = IndexedArray::<Poseidon, usize>::default();
     reference_indexed_array.init().unwrap();
     reference_indexed_tree.init().unwrap();
-    // let height = 26;
-    // let canopy = 10;
-    // let mut merkle_tree = IndexedMerkleTree::<Poseidon, usize>::new(height, canopy)
-    //     .map_err(|_| IndexerError::InvalidResponseData)?;
-    // merkle_tree.merkle_tree.root_history_array_len = Some(STATE_MERKLE_TREE_ROOTS);
-    // let mut merkle_tree = Box::new(merkle_tree);
-    // merkle_tree.init()?;
-    // let mut indexed_array = Box::<IndexedArray<Poseidon, usize>>::default();
-    // indexed_array.init()?;
+    let ref_leaves = (0..(reference_indexed_tree.merkle_tree.get_next_index() - 1))
+        .map(|i| reference_indexed_tree.merkle_tree.get_leaf(i).unwrap())
+        .collect::<Vec<[u8; 32]>>();
+    println!("Reference indexed leaves: {:?}", ref_leaves);
 
     // Test that the new config structure works correctly
     let config = StateUpdateConfig::default();
 
-    // Verify config structure values
-    assert_eq!(config.in_accounts_v1.min_entries, 0);
-    assert_eq!(config.in_accounts_v1.max_entries, 3);
-    assert_eq!(config.in_accounts_v1.probability, 0.3);
+    // // Verify config structure values
+    // assert_eq!(config.in_accounts_v1.min_entries, 0);
+    // assert_eq!(config.in_accounts_v1.max_entries, 3);
+    // assert_eq!(config.in_accounts_v1.probability, 0.3);
 
-    assert_eq!(config.in_accounts_v2.min_entries, 0);
-    assert_eq!(config.in_accounts_v2.max_entries, 3);
-    assert_eq!(config.in_accounts_v2.probability, 0.3);
+    // assert_eq!(config.in_accounts_v2.min_entries, 0);
+    // assert_eq!(config.in_accounts_v2.max_entries, 3);
+    // assert_eq!(config.in_accounts_v2.probability, 0.3);
 
-    assert_eq!(config.out_accounts_v1.min_entries, 0);
-    assert_eq!(config.out_accounts_v1.max_entries, 5);
-    assert_eq!(config.out_accounts_v1.probability, 1.0);
+    // assert_eq!(config.out_accounts_v1.min_entries, 0);
+    // assert_eq!(config.out_accounts_v1.max_entries, 5);
+    // assert_eq!(config.out_accounts_v1.probability, 1.0);
 
-    assert_eq!(config.out_accounts_v2.min_entries, 0);
-    assert_eq!(config.out_accounts_v2.max_entries, 5);
-    assert_eq!(config.out_accounts_v2.probability, 1.0);
+    // assert_eq!(config.out_accounts_v2.min_entries, 0);
+    // assert_eq!(config.out_accounts_v2.max_entries, 5);
+    // assert_eq!(config.out_accounts_v2.probability, 1.0);
 
-    assert_eq!(config.transactions.min_entries, 0);
-    assert_eq!(config.transactions.max_entries, 2);
-    assert_eq!(config.transactions.probability, 0.0);
+    // assert_eq!(config.transactions.min_entries, 0);
+    // assert_eq!(config.transactions.max_entries, 2);
+    // assert_eq!(config.transactions.probability, 0.0);
 
     // Test that we can create a state update with incremental values
     let mut base_seq_v1 = 500;

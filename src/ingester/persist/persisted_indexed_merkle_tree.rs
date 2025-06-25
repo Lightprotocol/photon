@@ -368,7 +368,7 @@ pub async fn persist_indexed_tree_updates(
         let tree_type = indexed_leaf_updates
             .values()
             .find(|update| update.tree == tree)
-            .map(|update| update.tree_type.clone())
+            .map(|update| update.tree_type)
             .ok_or_else(|| {
                 IngesterError::ParserError(format!(
                     "No indexed tree leaf updates found for tree: {}. Cannot determine tree type.",
@@ -406,7 +406,7 @@ pub async fn persist_indexed_tree_updates(
                 (sdk_tree, zeroeth_leaf.leaf_index as u64),
                 IndexedTreeLeafUpdate {
                     tree,
-                    tree_type: tree_type.clone(),
+                    tree_type,
                     hash: zeroeth_hash.0,
                     leaf: RawIndexedElement {
                         value: zeroeth_leaf.value.clone().try_into().map_err(|_e| {
@@ -429,7 +429,7 @@ pub async fn persist_indexed_tree_updates(
         }
 
         // Check if top element (leaf_index 1) is missing and insert it if needed - ONLY for V1 trees
-        if matches!(tree_type, TreeType::AddressV1 | TreeType::StateV1) {
+        if matches!(tree_type, TreeType::AddressV1) {
             let top_update = indexed_leaf_updates.get(&(sdk_tree, 1));
             if top_update.is_none() {
                 let top_leaf = get_top_element(sdk_tree.to_bytes().to_vec());
@@ -441,7 +441,7 @@ pub async fn persist_indexed_tree_updates(
                     (sdk_tree, top_leaf.leaf_index as u64),
                     IndexedTreeLeafUpdate {
                         tree,
-                        tree_type: tree_type.clone(),
+                        tree_type,
                         hash: top_hash.0,
                         leaf: RawIndexedElement {
                             value: top_leaf.value.clone().try_into().map_err(|_e| {
