@@ -123,7 +123,7 @@ fn get_rnd_state_update(
     base_seq_v1: u64,
     base_leaf_index_v1: u64,
     base_leaf_index_v2: u64,
-    _base_nullifier_queue_index: u64,
+    base_nullifier_queue_index: u64,
     v1_available_accounts_for_spending: &mut Vec<Hash>,
     v2_available_accounts_for_spending: &mut Vec<Hash>,
 ) -> (StateUpdate, StateUpdateMetadata) {
@@ -377,21 +377,20 @@ fn get_rnd_state_update(
         }
     }
 
-    // Generate batch_nullify_context (Vec<BatchNullifyContext>)
-    if rng.gen_bool(config.batch_nullify_context.probability) {
-        let count = rng.gen_range(
-            config.batch_nullify_context.min_entries..=config.batch_nullify_context.max_entries,
-        );
-        for i in 0..count {
-            state_update
-                .batch_nullify_context
-                .push(BatchNullifyContext {
-                    tx_hash: rng.gen::<[u8; 32]>(),
-                    account_hash: rng.gen::<[u8; 32]>(),
-                    nullifier: rng.gen::<[u8; 32]>(),
-                    nullifier_queue_index: i as u64,
-                });
-        }
+    // Generate batch_nullify_context (Vec<BatchNullifyContext>) for actual input accounts
+    // Create BatchNullifyContext entries for each input account so they get their v2-specific fields set
+    let mut nullifier_queue_index = base_nullifier_queue_index;
+    for account_hash in &state_update.in_accounts {
+        state_update
+            .batch_nullify_context
+            .push(BatchNullifyContext {
+                tx_hash: rng.gen::<[u8; 32]>(),
+                account_hash: account_hash.0, // Use the actual input account hash
+                nullifier: rng.gen::<[u8; 32]>(),
+                nullifier_queue_index,
+            });
+        nullifier_queue_index += 1;
+        metadata.batch_nullify_context_count += 1;
     }
 
     // Generate batch_new_addresses (Vec<AddressQueueUpdate>)
@@ -684,15 +683,25 @@ async fn assert_input_accounts_persisted(
     let mut expected_models: Vec<accounts::Model> = pre_existing_models
         .iter()
         .map(|model| {
-            // For all accounts (v1 and v2), spend_input_accounts() sets:
-            // - spent: true
-            // - prev_spent: Some(original_spent)
-            // v2-specific fields (nullifier_queue_index, tx_hash) are handled by BatchNullifyContext
-            accounts::Model {
-                spent: true,                   // Should be marked as spent
-                prev_spent: Some(model.spent), // prev_spent should be the original spent value
-                ..model.clone()                // All other fields should remain the same
+            let mut updated_model = accounts::Model {
+                spent: true,             // Should be marked as spent
+                prev_spent: Some(false), // prev_spent should be the original spent value
+                ..model.clone()          // All other fields should remain the same
+            };
+
+            // For accounts that have BatchNullifyContext, set the v2-specific fields from the state update
+            if let Some(batch_context) = state_update
+                .batch_nullify_context
+                .iter()
+                .find(|ctx| ctx.account_hash.as_slice() == model.hash.as_slice())
+            {
+                updated_model.nullifier_queue_index =
+                    Some(batch_context.nullifier_queue_index as i64);
+                updated_model.nullifier = Some(batch_context.nullifier.to_vec());
+                updated_model.tx_hash = Some(batch_context.tx_hash.to_vec());
             }
+
+            updated_model
         })
         .collect();
 

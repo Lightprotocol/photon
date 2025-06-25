@@ -94,8 +94,9 @@ pub struct StateUpdate {
     pub transactions: HashSet<Transaction>,
     pub leaf_nullifications: HashSet<LeafNullification>,
     pub indexed_merkle_tree_updates: HashMap<(Pubkey, u64), IndexedTreeLeafUpdate>,
-
+    // v2 state and address Merkle tree updates
     pub batch_merkle_tree_events: BatchMerkleTreeEvents,
+    // v2 input accounts that are inserted into the input queue
     pub batch_nullify_context: Vec<BatchNullifyContext>,
     pub batch_new_addresses: Vec<AddressQueueUpdate>,
 }
