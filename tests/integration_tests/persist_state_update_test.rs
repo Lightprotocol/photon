@@ -2,11 +2,9 @@ use crate::utils::*;
 use function_name::named;
 use light_compressed_account::indexer_event::event::BatchNullifyContext;
 use light_compressed_account::TreeType;
+use light_hasher::bigint::bigint_to_be_bytes_array;
 use light_hasher::Poseidon;
-use light_indexed_merkle_tree::{
-    array::{IndexedArray, IndexedElement},
-    reference::IndexedMerkleTree,
-};
+use light_indexed_merkle_tree::{array::IndexedArray, reference::IndexedMerkleTree};
 use light_merkle_tree_reference::MerkleTree;
 use num_bigint::BigUint;
 use photon_indexer::common::typedefs::account::AccountData;
@@ -132,6 +130,8 @@ fn get_rnd_state_update(
     base_indexed_seq: u64,
     v1_available_accounts_for_spending: &mut Vec<Hash>,
     v2_available_accounts_for_spending: &mut Vec<Hash>,
+    indexed_array: &mut IndexedArray<Poseidon, usize>,
+    reference_indexed_tree: &mut IndexedMerkleTree<Poseidon, usize>,
 ) -> (StateUpdate, StateUpdateMetadata) {
     let mut state_update = StateUpdate::default();
     let mut metadata = StateUpdateMetadata {
@@ -365,49 +365,63 @@ fn get_rnd_state_update(
         );
         metadata.indexed_merkle_tree_updates_count = count;
         for i in 0..count {
-            let tree = test_tree_pubkey;
-            let leaf_index = base_indexed_seq + i as u64;
+            let tree = solana_pubkey::pubkey!("amt1Ayt45jfbdw5YSo7iz6WZxUmnZsQTYXy82hVwyC2");
 
             // Generate simple but unique values for indexed elements
-            let mut value_bytes = [0u8; 32];
-            value_bytes[31] = (leaf_index % 256) as u8; // Make each value unique
+            let mut value_bytes = rng.gen::<[u8; 32]>();
+            value_bytes[0] = 0;
+            let value = BigUint::from_bytes_be(&value_bytes);
 
-            let mut next_value_bytes = [0u8; 32];
-            next_value_bytes[31] = 0;
+            // // Find the low element for this value using the indexed array
+            // let (old_low_element, old_low_element_next_value) = indexed_array
+            //     .find_low_element_for_nonexistent(&value)
+            //     .unwrap();
 
-            // For next_index, use a reasonable sequential value
-            let next_index = if i == count - 1 {
-                0
-            } else {
-                (base_indexed_seq + i as u64 + 1) as usize
-            };
+            // // Create the nullifier bundle which contains all the proper elements
+            // let nullifier_bundle = indexed_array
+            //     .new_element_with_low_element_index(old_low_element.index, &value)
+            //     .unwrap();
 
-            // Compute the proper hash for the indexed element using the IndexedElement::hash method
-            let indexed_element = IndexedElement {
-                index: leaf_index as usize,
-                value: BigUint::from_bytes_be(&value_bytes),
-                next_index,
-            };
-            let next_value = BigUint::from_bytes_be(&next_value_bytes);
-            let hash = indexed_element
-                .hash::<Poseidon>(&next_value)
-                .map_err(|e| format!("Failed to compute indexed element hash: {}", e))
+            // // Use the bundle data to create the update
+            // let leaf_index = nullifier_bundle.new_element.index;
+            // let next_index = nullifier_bundle.new_element.next_index;
+            // let next_value_bytes =
+            //     bigint_to_be_bytes_array::<32>(&nullifier_bundle.new_element_next_value).unwrap();
+
+            // // Compute the proper hash for the indexed element
+            // let hash = nullifier_bundle
+            //     .new_element
+            //     .hash::<Poseidon>(&nullifier_bundle.new_element_next_value)
+            //     .unwrap();
+            let nullifier_bundle = indexed_array.append(&value).unwrap();
+            let hash = nullifier_bundle
+                .new_element
+                .hash::<Poseidon>(&nullifier_bundle.new_element_next_value)
                 .unwrap();
-
+            reference_indexed_tree
+                .update(
+                    &nullifier_bundle.new_low_element,
+                    &nullifier_bundle.new_element,
+                    &nullifier_bundle.new_element_next_value,
+                )
+                .unwrap();
             let update = IndexedTreeLeafUpdate {
                 tree,
                 leaf: RawIndexedElement {
                     value: value_bytes,
-                    next_index,
-                    next_value: next_value_bytes,
-                    index: leaf_index as usize,
+                    next_index: nullifier_bundle.new_element.next_index,
+                    next_value: bigint_to_be_bytes_array::<32>(
+                        &nullifier_bundle.new_element_next_value,
+                    )
+                    .unwrap(),
+                    index: nullifier_bundle.new_element.index,
                 },
                 hash,
                 seq: base_indexed_seq + i as u64,
             };
             state_update
                 .indexed_merkle_tree_updates
-                .insert((tree, leaf_index), update);
+                .insert((tree, nullifier_bundle.new_element.index as u64), update);
         }
     }
 
@@ -965,8 +979,8 @@ async fn assert_indexed_tree_root(
     db_conn: &DatabaseConnection,
     metadata: &StateUpdateMetadata,
     state_update: &StateUpdate,
-    reference_indexed_tree: &mut IndexedMerkleTree<Poseidon, usize>,
-    reference_indexed_array: &mut IndexedArray<Poseidon, usize>,
+    reference_root: [u8; 32],
+    reference_tree: &IndexedMerkleTree<Poseidon, usize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use photon_indexer::dao::generated::indexed_trees;
     use sea_orm::ColumnTrait;
@@ -1005,25 +1019,40 @@ async fn assert_indexed_tree_root(
         );
     }
 
-    // Apply updates to reference tree
-    for ((_, _), update) in &state_update.indexed_merkle_tree_updates {
-        let value = BigUint::from_bytes_be(&update.leaf.value);
-        println!("Appending value {} to reference indexed tree", value);
-
-        // Use the reference tree append method
-        reference_indexed_tree.append(&value, reference_indexed_array)?;
-    }
-
-    // Get reference tree root
-    let reference_root = reference_indexed_tree.root();
-    println!(
-        "Reference indexed tree root: {}",
-        hex::encode(&reference_root)
-    );
-
     // Query database for indexed tree entries
     let db_indexed_entries = indexed_trees::Entity::find()
         .filter(indexed_trees::Column::Tree.eq(tree_pubkey_bytes.clone()))
+        .all(db_conn)
+        .await?;
+
+    // Get database root from state_trees table (indexed trees use same table structure)
+    use photon_indexer::dao::generated::state_trees;
+
+    let ref_leaves = (0..4)
+        .map(|i| reference_tree.merkle_tree.get_leaf(i).unwrap())
+        .collect::<Vec<[u8; 32]>>();
+    let mut leaf_nodes_from_db = state_trees::Entity::find()
+        .filter(state_trees::Column::Tree.eq(tree_pubkey_bytes.clone()))
+        .filter(state_trees::Column::Level.eq(0))
+        .all(db_conn)
+        .await?;
+
+    // Sort by leaf index
+    leaf_nodes_from_db.sort_by_key(|node| node.leaf_idx.unwrap_or(0));
+
+    let leaf_nodes = leaf_nodes_from_db
+        .iter()
+        .map(|x| {
+            let mut hash_array = [0u8; 32];
+            hash_array.copy_from_slice(&x.hash);
+            hash_array
+        })
+        .collect::<Vec<[u8; 32]>>();
+    assert_eq!(leaf_nodes, ref_leaves);
+
+    let root_nodes = state_trees::Entity::find()
+        .filter(state_trees::Column::Tree.eq(tree_pubkey_bytes.clone()))
+        .filter(state_trees::Column::Level.eq(26))
         .all(db_conn)
         .await?;
 
@@ -1069,10 +1098,38 @@ async fn assert_indexed_tree_root(
     }
 
     println!("✅ Indexed tree updates verification successful!");
-    println!(
-        "Reference tree has {} entries",
-        reference_indexed_array.len()
-    );
+
+    // Verify root nodes
+    if root_nodes.len() == 1 {
+        let root_node = &root_nodes[0];
+        let mut db_root_array = [0u8; 32];
+        db_root_array.copy_from_slice(&root_node.hash);
+
+        println!(
+            "Reference indexed tree root: {}",
+            hex::encode(&reference_root)
+        );
+        println!(
+            "Database indexed tree root: {}",
+            hex::encode(&db_root_array)
+        );
+
+        assert_eq!(
+            reference_root,
+            db_root_array,
+            "Indexed tree root mismatch!\nReference: {}\nDatabase:  {}",
+            hex::encode(&reference_root),
+            hex::encode(&db_root_array)
+        );
+
+        println!("✅ Indexed tree root verification successful!");
+    } else {
+        return Err(format!(
+            "Expected exactly 1 root node for indexed tree, found {}",
+            root_nodes.len()
+        )
+        .into());
+    }
 
     Ok(())
 }
@@ -1158,7 +1215,17 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     // Initialize reference indexed tree (v1 style)
     let mut reference_indexed_tree = IndexedMerkleTree::<Poseidon, usize>::new(26, 10).unwrap();
     let mut reference_indexed_array = IndexedArray::<Poseidon, usize>::default();
+    reference_indexed_array.init().unwrap();
     reference_indexed_tree.init().unwrap();
+    // let height = 26;
+    // let canopy = 10;
+    // let mut merkle_tree = IndexedMerkleTree::<Poseidon, usize>::new(height, canopy)
+    //     .map_err(|_| IndexerError::InvalidResponseData)?;
+    // merkle_tree.merkle_tree.root_history_array_len = Some(STATE_MERKLE_TREE_ROOTS);
+    // let mut merkle_tree = Box::new(merkle_tree);
+    // merkle_tree.init()?;
+    // let mut indexed_array = Box::<IndexedArray<Poseidon, usize>>::default();
+    // indexed_array.init()?;
 
     // Test that the new config structure works correctly
     let config = StateUpdateConfig::default();
@@ -1216,6 +1283,8 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
             base_indexed_seq,
             &mut v1_available_accounts_for_spending,
             &mut v2_available_accounts_for_spending,
+            &mut reference_indexed_array,
+            &mut reference_indexed_tree,
         );
         println!("state_update {:?}", state_update);
 
@@ -1268,8 +1337,8 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
             &setup.db_conn,
             &metadata,
             &state_update,
-            &mut reference_indexed_tree,
-            &mut reference_indexed_array,
+            reference_indexed_tree.root(),
+            &reference_indexed_tree,
         )
         .await
         .expect("Failed to verify indexed tree root");
