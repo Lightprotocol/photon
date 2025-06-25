@@ -376,6 +376,134 @@ pub async fn persist_indexed_tree_updates(
                 ))
             })?;
 
+        // Process low element updates - implement the missing indexed tree logic
+        // Build a local view of the tree to determine what low elements need updating
+        let tree_values: Vec<Vec<u8>> = indexed_leaf_updates
+            .iter()
+            .filter(|((tree_key, _), _)| *tree_key == sdk_tree)
+            .map(|(_, update)| update.leaf.value.to_vec())
+            .collect();
+        
+        if !tree_values.is_empty() {
+            // Query existing tree state
+            let mut indexed_tree = query_next_smallest_elements(txn, tree_values.clone(), sdk_tree.to_bytes().to_vec()).await?;
+            let mut elements_to_update: HashMap<i64, indexed_trees::Model> = HashMap::new();
+
+            // Add initialization elements if tree is empty
+            if indexed_tree.is_empty() {
+                let models = match &tree_type {
+                    TreeType::AddressV1 | TreeType::StateV1 => {
+                        vec![
+                            get_zeroeth_exclusion_range_v1(sdk_tree.to_bytes().to_vec()),
+                            get_top_element(sdk_tree.to_bytes().to_vec()),
+                        ]
+                    }
+                    _ => {
+                        vec![get_zeroeth_exclusion_range(sdk_tree.to_bytes().to_vec())]
+                    }
+                };
+                for model in models {
+                    elements_to_update.insert(model.leaf_index, model.clone());
+                    indexed_tree.insert(model.value.clone(), model);
+                }
+            }
+
+            // Collect low element updates first to avoid borrow checker issues
+            let mut low_element_updates: HashMap<(Pubkey, u64), IndexedTreeLeafUpdate> = HashMap::new();
+            
+            // Process each new element and update the tree structure
+            for ((tree_key, leaf_index), update) in &indexed_leaf_updates {
+                if *tree_key == sdk_tree && *leaf_index > 1 { // Skip initialization elements
+                    let value = update.leaf.value.to_vec();
+                    
+                    // Create the new indexed element
+                    let mut new_element = indexed_trees::Model {
+                        tree: sdk_tree.to_bytes().to_vec(),
+                        leaf_index: *leaf_index as i64,
+                        value: value.clone(),
+                        next_index: 0,
+                        next_value: vec![],
+                        seq: Some(update.seq as i64),
+                    };
+
+                    // Find the low element (largest element smaller than the new value)
+                    let low_element = indexed_tree
+                        .range(..value.clone())
+                        .next_back()
+                        .map(|(_, v)| v.clone());
+
+                    if let Some(mut low_element) = low_element {
+                        // Update the new element to point to what the low element was pointing to
+                        new_element.next_index = low_element.next_index;
+                        new_element.next_value = low_element.next_value.clone();
+
+                        // Update the low element to point to the new element
+                        low_element.next_index = *leaf_index as i64;
+                        low_element.next_value = value.clone();
+
+                        // Create the low element update
+                        let low_element_hash = match &tree_type {
+                            TreeType::AddressV1 | TreeType::StateV1 => {
+                                compute_range_node_hash_v1(&low_element).map_err(|e| {
+                                    IngesterError::ParserError(format!(
+                                        "Failed to compute low element hash: {}",
+                                        e
+                                    ))
+                                })?.0
+                            }
+                            _ => {
+                                compute_range_node_hash(&low_element).map_err(|e| {
+                                    IngesterError::ParserError(format!(
+                                        "Failed to compute low element hash: {}",
+                                        e
+                                    ))
+                                })?.0
+                            }
+                        };
+
+                        let low_element_update = IndexedTreeLeafUpdate {
+                            tree,
+                            tree_type,
+                            hash: low_element_hash,
+                            leaf: RawIndexedElement {
+                                value: low_element.value.clone().try_into().map_err(|_e| {
+                                    IngesterError::ParserError(format!(
+                                        "Failed to convert low element value to array {:?}",
+                                        low_element.value
+                                    ))
+                                })?,
+                                next_index: low_element.next_index as usize,
+                                next_value: low_element.next_value.clone().try_into().map_err(|_e| {
+                                    IngesterError::ParserError(
+                                        "Failed to convert low element next value to array".to_string(),
+                                    )
+                                })?,
+                                index: low_element.leaf_index as usize,
+                            },
+                            seq: update.seq, // Use same sequence as the new element
+                        };
+
+                        // Collect the low element update
+                        low_element_updates.insert(
+                            (sdk_tree, low_element.leaf_index as u64),
+                            low_element_update
+                        );
+
+                        // Update local tree state
+                        elements_to_update.insert(low_element.leaf_index, low_element.clone());
+                        indexed_tree.insert(low_element.value.clone(), low_element);
+                    }
+
+                    // Add the new element to local state
+                    elements_to_update.insert(new_element.leaf_index, new_element.clone());
+                    indexed_tree.insert(value, new_element);
+                }
+            }
+            
+            // Apply the low element updates
+            indexed_leaf_updates.extend(low_element_updates);
+        }
+
         // Check if zeroeth element (leaf_index 0) is missing and insert it if needed
         let zeroeth_update = indexed_leaf_updates.get(&(sdk_tree, 0));
         if zeroeth_update.is_none() {
