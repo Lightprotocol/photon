@@ -3769,6 +3769,7 @@ dependencies = [
  "light-bounded-vec",
  "light-hasher",
  "memoffset 0.9.1",
+ "solana-program-error",
  "thiserror 2.0.12",
 ]
 
@@ -3801,6 +3802,22 @@ dependencies = [
  "light-hasher",
  "num-bigint 0.4.6",
  "num-traits",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "light-indexed-merkle-tree"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f38362948ad7b8ae1fd1626d38743bed5a15563336fb5d4148b9162186c8e55"
+dependencies = [
+ "light-bounded-vec",
+ "light-concurrent-merkle-tree",
+ "light-hasher",
+ "light-merkle-tree-reference",
+ "num-bigint 0.4.6",
+ "num-traits",
+ "solana-program-error",
  "thiserror 2.0.12",
 ]
 
@@ -4565,6 +4582,7 @@ dependencies = [
  "light-compressed-account",
  "light-concurrent-merkle-tree",
  "light-hasher",
+ "light-indexed-merkle-tree",
  "light-merkle-tree-metadata",
  "light-merkle-tree-reference",
  "light-poseidon 0.3.0",
