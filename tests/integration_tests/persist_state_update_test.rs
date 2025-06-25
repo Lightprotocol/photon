@@ -106,7 +106,7 @@ impl Default for StateUpdateConfig {
             leaf_nullifications: CollectionConfig::new(0, 3, 0.0),
             indexed_merkle_tree_updates: CollectionConfig::new(0, 3, 1.0),
             batch_nullify_context: CollectionConfig::new(0, 2, 0.0),
-            batch_new_addresses: CollectionConfig::new(0, 3, 0.0),
+            batch_new_addresses: CollectionConfig::new(1, 3, 1.0),
 
             lamports_min: 1000,
             lamports_max: 1_000_000,
@@ -249,7 +249,7 @@ fn get_rnd_state_update(
 
         let count =
             rng.gen_range(config.out_accounts_v2.min_entries..=config.out_accounts_v2.max_entries);
-        metadata.out_accounts_v2_count = count as usize;
+        metadata.out_accounts_v2_count = count;
         for i in 0..count {
             let account = AccountWithContext {
                 account: Account {
@@ -453,16 +453,23 @@ fn get_rnd_state_update(
         metadata.batch_nullify_context_count += 1;
     }
 
-    // Generate batch_new_addresses (Vec<AddressQueueUpdate>)
+    // Generate batch_new_addresses (Vec<AddressQueueUpdate>) - V2 addresses for address queue
     if rng.gen_bool(config.batch_new_addresses.probability) {
+        // Use V2 tree for new addresses (they go into address queue)
+        let v2_tree_info = TreeInfo::get(V2_TEST_TREE_PUBKEY_STR)
+            .expect("V2 test tree should exist in QUEUE_TREE_MAPPING");
+        let v2_tree_pubkey = v2_tree_info.tree;
+        
         let count = rng.gen_range(
             config.batch_new_addresses.min_entries..=config.batch_new_addresses.max_entries,
         );
+        metadata.batch_new_addresses_count = count;
+        
         for i in 0..count {
             state_update.batch_new_addresses.push(AddressQueueUpdate {
-                tree: SerializablePubkey::from(test_tree_pubkey),
+                tree: SerializablePubkey::from(v2_tree_pubkey),
                 address: rng.gen::<[u8; 32]>(),
-                queue_index: i as u64,
+                queue_index: nullifier_queue_index + i as u64, // Continue from where nullifier queue left off
             });
         }
     }
@@ -549,7 +556,7 @@ fn update_test_state_after_iteration(
     *base_seq_v1 += v1_output_count;
     *base_leaf_index_v1 += v1_output_count;
     *base_leaf_index_v2 += v2_output_count;
-    *base_nullifier_queue_index += v2_input_count; // Only v2 input accounts get nullifier queue positions
+    *base_nullifier_queue_index += v2_input_count + metadata.batch_new_addresses_count as u64; // V2 input accounts and new addresses share queue space
     *base_indexed_seq += indexed_updates_count; // Track indexed tree sequence
 
     println!(
@@ -804,6 +811,70 @@ async fn assert_input_accounts_persisted(
     println!(
         "✅ Successfully verified {} input accounts were marked as spent with complete models",
         db_accounts.len()
+    );
+    Ok(())
+}
+
+/// Assert that all batch_new_addresses from the state update were inserted correctly into the address queue
+async fn assert_batch_new_addresses_persisted(
+    db_conn: &DatabaseConnection,
+    metadata: &StateUpdateMetadata,
+    state_update: &StateUpdate,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use photon_indexer::dao::generated::address_queues;
+    use sea_orm::ColumnTrait;
+
+    // Validate metadata matches actual state update
+    assert_eq!(
+        state_update.batch_new_addresses.len(),
+        metadata.batch_new_addresses_count,
+        "Metadata batch_new_addresses count ({}) doesn't match actual batch_new_addresses ({})",
+        metadata.batch_new_addresses_count,
+        state_update.batch_new_addresses.len()
+    );
+
+    if state_update.batch_new_addresses.is_empty() {
+        println!("✅ No batch_new_addresses - skipping address queue verification");
+        return Ok(());
+    }
+
+    // Create expected models from state update
+    let expected_models: Vec<address_queues::Model> = state_update
+        .batch_new_addresses
+        .iter()
+        .map(|address_update| address_queues::Model {
+            address: address_update.address.to_vec(),
+            tree: address_update.tree.0.to_bytes().to_vec(),
+            queue_index: address_update.queue_index as i64,
+        })
+        .collect();
+
+    // Get all addresses for the query
+    let expected_addresses: Vec<Vec<u8>> = expected_models
+        .iter()
+        .map(|model| model.address.clone())
+        .collect();
+
+    // Query database for addresses with matching addresses
+    let mut db_addresses = address_queues::Entity::find()
+        .filter(address_queues::Column::Address.is_in(expected_addresses))
+        .all(db_conn)
+        .await?;
+
+    // Sort both vectors by address for consistent comparison
+    let mut expected_models_sorted = expected_models;
+    expected_models_sorted.sort_by(|a, b| a.address.cmp(&b.address));
+    db_addresses.sort_by(|a, b| a.address.cmp(&b.address));
+
+    // Single assert comparing the entire vectors
+    assert_eq!(
+        db_addresses, expected_models_sorted,
+        "Database addresses do not match expected addresses"
+    );
+
+    println!(
+        "✅ Successfully verified {} batch_new_addresses were persisted correctly in address queue",
+        db_addresses.len()
     );
     Ok(())
 }
@@ -1221,7 +1292,7 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     // Set up deterministic randomness following the light-protocol pattern
     let mut thread_rng = ThreadRng::default();
     let random_seed = thread_rng.next_u64();
-    let seed: u64 = 5331180609400104349; //random_seed;
+    let seed: u64 = random_seed;
     println!("\n\nconfig structure test seed {}\n\n", seed);
     let mut rng = StdRng::seed_from_u64(seed);
 
@@ -1329,6 +1400,11 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
         )
         .await
         .expect("Failed to verify input accounts persistence");
+
+        // 5.5. Assert that all batch_new_addresses were persisted correctly in address queue
+        assert_batch_new_addresses_persisted(&setup.db_conn, &metadata, &state_update)
+            .await
+            .expect("Failed to verify batch_new_addresses persistence");
 
         // 6. Assert that state tree root matches reference tree root
         // - updates reference tree
