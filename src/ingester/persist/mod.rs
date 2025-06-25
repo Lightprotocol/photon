@@ -435,7 +435,7 @@ async fn append_output_accounts(
             slot_created: Set(account.account.slot_created.0 as i64),
             seq: Set(account.account.seq.map(|x| x.0 as i64)),
             prev_spent: Set(None),
-            tx_hash: Default::default(), // Its sets at input queue insertion for batch updates
+            tx_hash: Set(account.context.tx_hash.as_ref().map(|x| x.to_vec())),
         });
 
         if let Some(token_data) = parse_token_data(&account.account)? {
