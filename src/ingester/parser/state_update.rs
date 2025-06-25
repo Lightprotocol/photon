@@ -86,7 +86,9 @@ impl From<NewAddress> for AddressQueueUpdate {
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 /// Representation of state update of the compression system that is optimal for simple persistence.
 pub struct StateUpdate {
+    // v1 and v2 tree accounts
     pub in_accounts: HashSet<Hash>,
+    // v1 and v2 tree accounts
     pub out_accounts: Vec<AccountWithContext>,
     pub account_transactions: HashSet<AccountTransaction>,
     pub transactions: HashSet<Transaction>,
