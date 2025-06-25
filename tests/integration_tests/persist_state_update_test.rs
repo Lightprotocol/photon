@@ -52,11 +52,27 @@ impl CollectionConfig {
     }
 }
 
+/// Metadata about what was generated in a StateUpdate
+#[derive(Debug, Clone)]
+pub struct StateUpdateMetadata {
+    pub in_accounts_v1_count: usize,
+    pub in_accounts_v2_count: usize,
+    pub out_accounts_v1_count: usize,
+    pub out_accounts_v2_count: usize,
+    pub account_transactions_count: usize,
+    pub transactions_count: usize,
+    pub leaf_nullifications_count: usize,
+    pub indexed_merkle_tree_updates_count: usize,
+    pub batch_nullify_context_count: usize,
+    pub batch_new_addresses_count: usize,
+}
+
 /// Configuration for generating random StateUpdate data
 #[derive(Debug, Clone)]
 pub struct StateUpdateConfig {
     // Collection configurations for StateUpdate fields
     pub in_accounts_v1: CollectionConfig,
+    pub in_accounts_v2: CollectionConfig,
     pub out_accounts_v1: CollectionConfig,
     pub out_accounts_v2: CollectionConfig,
     pub account_transactions: CollectionConfig,
@@ -79,6 +95,7 @@ impl Default for StateUpdateConfig {
     fn default() -> Self {
         Self {
             in_accounts_v1: CollectionConfig::new(0, 3, 0.3),
+            in_accounts_v2: CollectionConfig::new(0, 3, 0.3),
             out_accounts_v1: CollectionConfig::new(0, 5, 1.0),
             out_accounts_v2: CollectionConfig::new(0, 5, 1.0),
             account_transactions: CollectionConfig::new(0, 3, 0.0),
@@ -103,12 +120,26 @@ fn get_rnd_state_update(
     rng: &mut StdRng,
     config: &StateUpdateConfig,
     slot: u64,
-    base_seq: u64,
+    base_seq_v1: u64,
     base_leaf_index_v1: u64,
     base_leaf_index_v2: u64,
+    _base_nullifier_queue_index: u64,
     v1_available_accounts_for_spending: &mut Vec<Hash>,
-) -> StateUpdate {
+    v2_available_accounts_for_spending: &mut Vec<Hash>,
+) -> (StateUpdate, StateUpdateMetadata) {
     let mut state_update = StateUpdate::default();
+    let mut metadata = StateUpdateMetadata {
+        in_accounts_v1_count: 0,
+        in_accounts_v2_count: 0,
+        out_accounts_v1_count: 0,
+        out_accounts_v2_count: 0,
+        account_transactions_count: 0,
+        transactions_count: 0,
+        leaf_nullifications_count: 0,
+        indexed_merkle_tree_updates_count: 0,
+        batch_nullify_context_count: 0,
+        batch_new_addresses_count: 0,
+    };
 
     // Generate in_accounts (HashSet<Hash>) - v1 accounts that will be spent
     if !v1_available_accounts_for_spending.is_empty()
@@ -125,6 +156,27 @@ fn get_rnd_state_update(
                 let index = rng.gen_range(0..v1_available_accounts_for_spending.len());
                 let account_hash = v1_available_accounts_for_spending.remove(index);
                 state_update.in_accounts.insert(account_hash);
+                metadata.in_accounts_v1_count += 1;
+            }
+        }
+    }
+
+    // Generate in_accounts (HashSet<Hash>) - v2 accounts that will be spent
+    if !v2_available_accounts_for_spending.is_empty()
+        && rng.gen_bool(config.in_accounts_v2.probability)
+    {
+        let max_to_spend = config
+            .in_accounts_v2
+            .max_entries
+            .min(v2_available_accounts_for_spending.len());
+        let count = rng.gen_range(config.in_accounts_v2.min_entries..=max_to_spend);
+
+        for _i in 0..count {
+            if !v2_available_accounts_for_spending.is_empty() {
+                let index = rng.gen_range(0..v2_available_accounts_for_spending.len());
+                let account_hash = v2_available_accounts_for_spending.remove(index);
+                state_update.in_accounts.insert(account_hash);
+                metadata.in_accounts_v2_count += 1;
             }
         }
     }
@@ -138,6 +190,7 @@ fn get_rnd_state_update(
 
         let count =
             rng.gen_range(config.out_accounts_v1.min_entries..=config.out_accounts_v1.max_entries);
+        metadata.out_accounts_v1_count = count as usize;
         for i in 0..count {
             let account = AccountWithContext {
                 account: Account {
@@ -166,7 +219,7 @@ fn get_rnd_state_update(
                     ),
                     tree: SerializablePubkey::from(test_tree_pubkey),
                     leaf_index: UnsignedInteger(base_leaf_index_v1 + i as u64),
-                    seq: Some(UnsignedInteger(base_seq + i as u64)),
+                    seq: Some(UnsignedInteger(base_seq_v1 + i as u64)),
                     slot_created: UnsignedInteger(slot),
                 },
                 context: AccountContext {
@@ -190,6 +243,7 @@ fn get_rnd_state_update(
 
         let count =
             rng.gen_range(config.out_accounts_v2.min_entries..=config.out_accounts_v2.max_entries);
+        metadata.out_accounts_v2_count = count as usize;
         for i in 0..count {
             let account = AccountWithContext {
                 account: Account {
@@ -291,7 +345,7 @@ fn get_rnd_state_update(
             state_update.leaf_nullifications.insert(LeafNullification {
                 tree: test_tree_pubkey,
                 leaf_index: base_leaf_index_v1 + i as u64,
-                seq: base_seq + i as u64,
+                seq: base_seq_v1 + i as u64,
                 signature: Signature::from(sig_bytes),
             });
         }
@@ -315,7 +369,7 @@ fn get_rnd_state_update(
                     index: (base_leaf_index_v1 + i as u64) as usize,
                 },
                 hash: rng.gen::<[u8; 32]>(),
-                seq: base_seq + i as u64,
+                seq: base_seq_v1 + i as u64,
             };
             state_update
                 .indexed_merkle_tree_updates
@@ -356,7 +410,7 @@ fn get_rnd_state_update(
 
     // Note: batch_merkle_tree_events is left as default since it's complex and rarely used
 
-    state_update
+    (state_update, metadata)
 }
 
 /// Helper function to persist a state update and commit the transaction
@@ -396,13 +450,72 @@ async fn fetch_pre_existing_input_models(
     Ok(models)
 }
 
+/// Helper function to update test state after processing a state update
+fn update_test_state_after_iteration(
+    state_update: &StateUpdate,
+    metadata: &StateUpdateMetadata,
+    v1_available_accounts_for_spending: &mut Vec<Hash>,
+    v2_available_accounts_for_spending: &mut Vec<Hash>,
+    base_seq_v1: &mut u64,
+    base_leaf_index_v1: &mut u64,
+    base_leaf_index_v2: &mut u64,
+    base_nullifier_queue_index: &mut u64,
+) {
+    // Collect new v1 output accounts for future spending
+    let new_v1_accounts: Vec<Hash> = state_update
+        .out_accounts
+        .iter()
+        .filter(|acc| acc.context.tree_type == TreeType::StateV1 as u16)
+        .map(|acc| acc.account.hash.clone())
+        .collect();
+    v1_available_accounts_for_spending.extend(new_v1_accounts.iter().cloned());
+
+    // Collect new v2 output accounts for future spending
+    let new_v2_accounts: Vec<Hash> = state_update
+        .out_accounts
+        .iter()
+        .filter(|acc| acc.context.tree_type == TreeType::StateV2 as u16)
+        .map(|acc| acc.account.hash.clone())
+        .collect();
+    v2_available_accounts_for_spending.extend(new_v2_accounts.iter().cloned());
+
+    // Update indices using metadata for precise counts
+    let v1_output_count = metadata.out_accounts_v1_count as u64;
+    let v2_output_count = metadata.out_accounts_v2_count as u64;
+    let _v1_input_count = metadata.in_accounts_v1_count as u64;
+    let v2_input_count = metadata.in_accounts_v2_count as u64;
+
+    *base_seq_v1 += v1_output_count;
+    *base_leaf_index_v1 += v1_output_count;
+    *base_leaf_index_v2 += v2_output_count;
+    *base_nullifier_queue_index += v2_input_count; // Only v2 input accounts get nullifier queue positions
+
+    println!(
+        "Available accounts for spending: v1={}, v2={}",
+        v1_available_accounts_for_spending.len(),
+        v2_available_accounts_for_spending.len()
+    );
+}
+
 /// Assert that all output accounts from the state update were inserted correctly into the database
 async fn assert_output_accounts_persisted(
     db_conn: &DatabaseConnection,
+    metadata: &StateUpdateMetadata,
     state_update: &StateUpdate,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use photon_indexer::dao::generated::accounts;
     use sea_orm::ColumnTrait;
+
+    // Validate metadata matches actual state update
+    let expected_total_out_accounts =
+        metadata.out_accounts_v1_count + metadata.out_accounts_v2_count;
+    assert_eq!(
+        state_update.out_accounts.len(),
+        expected_total_out_accounts,
+        "Metadata out_accounts count ({}) doesn't match actual out_accounts ({})",
+        expected_total_out_accounts,
+        state_update.out_accounts.len()
+    );
 
     if state_update.out_accounts.is_empty() {
         // If no accounts expected, verify table is empty
@@ -414,6 +527,30 @@ async fn assert_output_accounts_persisted(
         // );
         return Ok(());
     }
+
+    // Validate v1/v2 split matches metadata
+    let actual_v1_count = state_update
+        .out_accounts
+        .iter()
+        .filter(|acc| acc.context.tree_type == 1) // TreeType::StateV1
+        .count();
+    let actual_v2_count = state_update
+        .out_accounts
+        .iter()
+        .filter(|acc| acc.context.tree_type == 3) // TreeType::StateV2
+        .count();
+
+    assert_eq!(
+        actual_v1_count, metadata.out_accounts_v1_count,
+        "Metadata v1 out_accounts count ({}) doesn't match actual v1 count ({})",
+        metadata.out_accounts_v1_count, actual_v1_count
+    );
+
+    assert_eq!(
+        actual_v2_count, metadata.out_accounts_v2_count,
+        "Metadata v2 out_accounts count ({}) doesn't match actual v2 count ({})",
+        metadata.out_accounts_v2_count, actual_v2_count
+    );
 
     // Create expected models from state update
     let expected_models: Vec<accounts::Model> = state_update
@@ -489,24 +626,72 @@ async fn assert_output_accounts_persisted(
 /// This function compares the complete account models, not just the spent flag
 async fn assert_input_accounts_persisted(
     db_conn: &DatabaseConnection,
+    metadata: &StateUpdateMetadata,
     state_update: &StateUpdate,
     pre_existing_models: &[photon_indexer::dao::generated::accounts::Model],
+    _base_nullifier_queue_index: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use photon_indexer::dao::generated::accounts;
     use sea_orm::ColumnTrait;
+
+    // Validate metadata matches actual state update
+    let expected_total_in_accounts = metadata.in_accounts_v1_count + metadata.in_accounts_v2_count;
+    assert_eq!(
+        state_update.in_accounts.len(),
+        expected_total_in_accounts,
+        "Metadata in_accounts count ({}) doesn't match actual in_accounts ({})",
+        expected_total_in_accounts,
+        state_update.in_accounts.len()
+    );
+
+    // Validate we have the right number of pre-existing models
+    assert_eq!(
+        pre_existing_models.len(),
+        expected_total_in_accounts,
+        "Pre-existing models count ({}) doesn't match expected in_accounts ({})",
+        pre_existing_models.len(),
+        expected_total_in_accounts
+    );
 
     if state_update.in_accounts.is_empty() {
         println!("✅ No input accounts - skipping input accounts verification");
         return Ok(());
     }
 
+    // Validate v1/v2 split in pre-existing models matches metadata
+    let actual_v1_input_count = pre_existing_models
+        .iter()
+        .filter(|model| model.tree_type == Some(1)) // TreeType::StateV1
+        .count();
+    let actual_v2_input_count = pre_existing_models
+        .iter()
+        .filter(|model| model.tree_type == Some(3)) // TreeType::StateV2
+        .count();
+
+    assert_eq!(
+        actual_v1_input_count, metadata.in_accounts_v1_count,
+        "Metadata v1 in_accounts count ({}) doesn't match actual v1 pre-existing count ({})",
+        metadata.in_accounts_v1_count, actual_v1_input_count
+    );
+
+    assert_eq!(
+        actual_v2_input_count, metadata.in_accounts_v2_count,
+        "Metadata v2 in_accounts count ({}) doesn't match actual v2 pre-existing count ({})",
+        metadata.in_accounts_v2_count, actual_v2_input_count
+    );
+
     // Create expected models from pre-existing models with spent=true, prev_spent=original spent
     let mut expected_models: Vec<accounts::Model> = pre_existing_models
         .iter()
         .map(|model| {
+            // For all accounts (v1 and v2), spend_input_accounts() sets:
+            // - spent: true
+            // - prev_spent: Some(original_spent)
+            // v2-specific fields (nullifier_queue_index, tx_hash) are handled by BatchNullifyContext
             accounts::Model {
-                spent: true,     // Should be marked as spent
-                ..model.clone()  // All other fields should remain the same
+                spent: true,                   // Should be marked as spent
+                prev_spent: Some(model.spent), // prev_spent should be the original spent value
+                ..model.clone()                // All other fields should remain the same
             }
         })
         .collect();
@@ -554,11 +739,24 @@ async fn assert_input_accounts_persisted(
 /// Assert that state tree root matches reference implementation after appending new hashes
 async fn assert_state_tree_root(
     db_conn: &DatabaseConnection,
-    reference_tree: &mut MerkleTree<Poseidon>,
+    metadata: &StateUpdateMetadata,
     state_update: &StateUpdate,
+    v1_reference_tree: &mut MerkleTree<Poseidon>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use photon_indexer::dao::generated::state_trees;
     use sea_orm::ColumnTrait;
+
+    // Validate metadata consistency (same as output accounts validation)
+    let expected_total_out_accounts =
+        metadata.out_accounts_v1_count + metadata.out_accounts_v2_count;
+    assert_eq!(
+        state_update.out_accounts.len(),
+        expected_total_out_accounts,
+        "State tree: Metadata out_accounts count ({}) doesn't match actual out_accounts ({})",
+        expected_total_out_accounts,
+        state_update.out_accounts.len()
+    );
+
     if state_update.out_accounts.is_empty() {
         println!("✅ No output accounts - skipping state tree root verification");
         return Ok(());
@@ -672,11 +870,11 @@ async fn assert_state_tree_root(
 
     for account_with_context in &v1_accounts {
         let leaf_hash = account_with_context.account.hash.0;
-        reference_tree.append(&leaf_hash)?;
+        v1_reference_tree.append(&leaf_hash)?;
     }
 
     // Get reference tree root after construction
-    let reference_root = reference_tree.root();
+    let reference_root = v1_reference_tree.root();
     println!("Reference tree root: {}", hex::encode(&reference_root));
 
     // Get database root node for comparison
@@ -792,7 +990,7 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     println!("\n\nconfig structure test seed {}\n\n", seed);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    let mut reference_tree = MerkleTree::<Poseidon>::new(26, 0);
+    let mut v1_reference_tree = MerkleTree::<Poseidon>::new(26, 0);
 
     // Test that the new config structure works correctly
     let config = StateUpdateConfig::default();
@@ -801,6 +999,10 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     assert_eq!(config.in_accounts_v1.min_entries, 0);
     assert_eq!(config.in_accounts_v1.max_entries, 3);
     assert_eq!(config.in_accounts_v1.probability, 0.3);
+
+    assert_eq!(config.in_accounts_v2.min_entries, 0);
+    assert_eq!(config.in_accounts_v2.max_entries, 3);
+    assert_eq!(config.in_accounts_v2.probability, 0.3);
 
     assert_eq!(config.out_accounts_v1.min_entries, 0);
     assert_eq!(config.out_accounts_v1.max_entries, 5);
@@ -815,87 +1017,92 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     assert_eq!(config.transactions.probability, 0.0);
 
     // Test that we can create a state update with incremental values
-    let mut base_seq = 500;
+    let mut base_seq_v1 = 500;
     let mut base_leaf_index_v1 = 0;
     let mut base_leaf_index_v2 = 1000; // Use separate leaf index space for v2
+    let mut base_nullifier_queue_index = 0; // Track nullifier queue position for v2 input accounts
     let mut v1_available_accounts_for_spending: Vec<Hash> = Vec::new();
+    let mut v2_available_accounts_for_spending: Vec<Hash> = Vec::new();
     let num_iters = 100;
+
+    // Steps:
+    // 1. Generate random state update
+    // 2. Fetch pre-existing account models for input accounts before persisting
+    // 3. Persist the simple state update
+    // 4. Assert output accounts
+    // 5. Assert input accounts
+    // 6. Assert state tree root matches reference tree root
+    // 7. Update test state
     for slot in 0..num_iters {
         println!("iter {}", slot);
-        let simple_state_update = get_rnd_state_update(
+        // 1. Generate random state update
+        let (state_update, metadata) = get_rnd_state_update(
             &mut rng,
             &config,
             slot,
-            base_seq,
+            base_seq_v1,
             base_leaf_index_v1,
             base_leaf_index_v2,
+            base_nullifier_queue_index,
             &mut v1_available_accounts_for_spending,
+            &mut v2_available_accounts_for_spending,
         );
-        println!("simple_state_update {:?}", simple_state_update);
+        println!("state_update {:?}", state_update);
 
-        // Fetch pre-existing account models for input accounts before persisting
+        // 2. Fetch pre-existing account models for input accounts before persisting
         let pre_existing_input_models =
-            fetch_pre_existing_input_models(setup.db_conn.as_ref(), &simple_state_update)
+            fetch_pre_existing_input_models(setup.db_conn.as_ref(), &state_update)
                 .await
                 .expect("Failed to fetch pre-existing input accounts");
 
-        // Persist the simple state update
-        let result =
-            persist_state_update_and_commit(&setup.db_conn, simple_state_update.clone()).await;
+        // 3. Persist the random state update
+        let result = persist_state_update_and_commit(&setup.db_conn, state_update.clone()).await;
 
         // Should complete successfully
         assert!(
             result.is_ok(),
-            "Failed to persist simple state update: {:?}",
+            "Failed to persist random state update: {:?}",
             result.err()
         );
 
-        // Assert that all output accounts were persisted correctly
-        assert_output_accounts_persisted(&setup.db_conn, &simple_state_update)
+        // 4. Assert that all output accounts were persisted correctly
+        assert_output_accounts_persisted(&setup.db_conn, &metadata, &state_update)
             .await
             .expect("Failed to verify output accounts persistence");
 
-        // Assert that all input accounts were marked as spent with complete models
+        // 5. Assert that all input accounts were marked as spent with complete models
         assert_input_accounts_persisted(
             &setup.db_conn,
-            &simple_state_update,
+            &metadata,
+            &state_update,
             &pre_existing_input_models,
+            base_nullifier_queue_index,
         )
         .await
         .expect("Failed to verify input accounts persistence");
 
-        // Assert that state tree root matches reference implementation
-        assert_state_tree_root(&setup.db_conn, &mut reference_tree, &simple_state_update)
-            .await
-            .expect("Failed to verify state tree root");
+        // 6. Assert that state tree root matches reference tree root
+        // - updates reference tree
+        assert_state_tree_root(
+            &setup.db_conn,
+            &metadata,
+            &state_update,
+            &mut v1_reference_tree,
+        )
+        .await
+        .expect("Failed to verify state tree root");
 
-        {
-            // Collect new v1 output accounts for future spending
-            let new_v1_accounts: Vec<Hash> = simple_state_update
-                .out_accounts
-                .iter()
-                .filter(|acc| acc.context.tree_type == TreeType::StateV1 as u16)
-                .map(|acc| acc.account.hash.clone())
-                .collect();
-            v1_available_accounts_for_spending.extend(new_v1_accounts.iter().cloned());
-
-            // Update leaf indices separately for v1 and v2
-            let v1_count = new_v1_accounts.len() as u64;
-            let v2_count = simple_state_update
-                .out_accounts
-                .iter()
-                .filter(|acc| acc.context.tree_type == TreeType::StateV2 as u16)
-                .count() as u64;
-
-            base_seq += simple_state_update.out_accounts.len() as u64;
-            base_leaf_index_v1 += v1_count;
-            base_leaf_index_v2 += v2_count;
-
-            println!(
-                "Available accounts for spending: {}",
-                v1_available_accounts_for_spending.len()
-            );
-        }
+        // 7. Update test state after processing the state update
+        update_test_state_after_iteration(
+            &state_update,
+            &metadata,
+            &mut v1_available_accounts_for_spending,
+            &mut v2_available_accounts_for_spending,
+            &mut base_seq_v1,
+            &mut base_leaf_index_v1,
+            &mut base_leaf_index_v2,
+            &mut base_nullifier_queue_index,
+        );
     }
     println!("Config structure test completed successfully - unified CollectionConfig approach with incremental slot/seq/leaf_index working");
 }
