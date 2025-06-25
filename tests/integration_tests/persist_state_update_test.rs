@@ -160,7 +160,7 @@ fn get_rnd_state_update(
                 context: AccountContext {
                     tree_type: TreeType::StateV1 as u16,
                     queue: tree_info.queue.into(),
-                    tx_hash: None, // V1 accounts never have tx_hash
+                    tx_hash: None,          // V1 accounts never have tx_hash
                     in_output_queue: false, // V1 accounts don't use output queues
                     ..Default::default()
                 },
@@ -214,7 +214,7 @@ fn get_rnd_state_update(
                     queue: tree_info.queue.into(),
                     in_output_queue: true, // V2 accounts use output queues
                     tx_hash: if rng.gen_bool(0.5) {
-                        Some(Hash::new_unique()) // Generate proper Hash for V2
+                        Some(Hash::from(rng.gen::<[u8; 32]>()))
                     } else {
                         None
                     },
@@ -462,22 +462,19 @@ async fn assert_state_tree_root(
 
     // For now, only verify v1 accounts since we're using a single reference tree
     // Filter to only v1 accounts for tree root verification
-    let v1_accounts: Vec<_> = state_update.out_accounts.iter()
+    let v1_accounts: Vec<_> = state_update
+        .out_accounts
+        .iter()
         .filter(|acc| acc.context.tree_type == TreeType::StateV1 as u16)
         .collect();
-    
+
     if v1_accounts.is_empty() {
         println!("✅ No v1 output accounts - skipping state tree root verification");
         return Ok(());
     }
 
     // Get the tree pubkey from the first v1 output account
-    let tree_pubkey_bytes = v1_accounts[0]
-        .account
-        .tree
-        .0
-        .to_bytes()
-        .to_vec();
+    let tree_pubkey_bytes = v1_accounts[0].account.tree.0.to_bytes().to_vec();
 
     println!("V1 Account Hashes (should be in tree):");
     for account_with_context in &v1_accounts {
@@ -487,10 +484,12 @@ async fn assert_state_tree_root(
     }
 
     // Also log V2 accounts for visibility (these go to output queue)
-    let v2_accounts: Vec<_> = state_update.out_accounts.iter()
+    let v2_accounts: Vec<_> = state_update
+        .out_accounts
+        .iter()
         .filter(|acc| acc.context.tree_type == TreeType::StateV2 as u16)
         .collect();
-    
+
     if !v2_accounts.is_empty() {
         println!("V2 Account Hashes (go to output queue, not tree directly):");
         for account_with_context in &v2_accounts {
@@ -539,11 +538,10 @@ async fn assert_state_tree_root(
         println!("Verifying V2 accounts are NOT in state tree (should be in output queue only):");
         for account_with_context in &v2_accounts {
             let account_hash = hex::encode(&account_with_context.account.hash.0);
-            let leaf_index = account_with_context.account.leaf_index.0;
 
-            let found_leaf = leaf_nodes.iter().find(|leaf| {
-                hex::encode(&leaf.hash) == account_hash
-            });
+            let found_leaf = leaf_nodes
+                .iter()
+                .find(|leaf| hex::encode(&leaf.hash) == account_hash);
 
             assert!(
                 found_leaf.is_none(),
@@ -551,10 +549,15 @@ async fn assert_state_tree_root(
                 account_hash,
                 found_leaf.map(|leaf| leaf.leaf_idx)
             );
-            
-            println!("  ✅ V2 Hash({}) correctly NOT in state tree (in output queue)", account_hash);
+
+            println!(
+                "  ✅ V2 Hash({}) correctly NOT in state tree (in output queue)",
+                account_hash
+            );
         }
-        println!("✅ All V2 account hashes verified as NOT in state tree (correctly in output queue)");
+        println!(
+            "✅ All V2 account hashes verified as NOT in state tree (correctly in output queue)"
+        );
     }
 
     // Append only the V1 leaves from current state update to reference tree
@@ -714,8 +717,14 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     let num_iters = 10;
     for slot in 0..num_iters {
         println!("iter {}", slot);
-        let simple_state_update =
-            get_rnd_state_update(&mut rng, &config, slot, base_seq, base_leaf_index_v1, base_leaf_index_v2);
+        let simple_state_update = get_rnd_state_update(
+            &mut rng,
+            &config,
+            slot,
+            base_seq,
+            base_leaf_index_v1,
+            base_leaf_index_v2,
+        );
         println!("simple_state_update {:?}", simple_state_update);
 
         // Persist the simple state update
@@ -739,13 +748,17 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
             .await
             .expect("Failed to verify state tree root");
         // Update leaf indices separately for v1 and v2
-        let v1_count = simple_state_update.out_accounts.iter()
+        let v1_count = simple_state_update
+            .out_accounts
+            .iter()
             .filter(|acc| acc.context.tree_type == TreeType::StateV1 as u16)
             .count() as u64;
-        let v2_count = simple_state_update.out_accounts.iter()
+        let v2_count = simple_state_update
+            .out_accounts
+            .iter()
             .filter(|acc| acc.context.tree_type == TreeType::StateV2 as u16)
             .count() as u64;
-        
+
         base_seq += simple_state_update.out_accounts.len() as u64;
         base_leaf_index_v1 += v1_count;
         base_leaf_index_v2 += v2_count;
