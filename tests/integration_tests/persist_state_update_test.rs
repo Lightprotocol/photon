@@ -76,7 +76,7 @@ impl Default for StateUpdateConfig {
     fn default() -> Self {
         Self {
             in_accounts: CollectionConfig::new(0, 5, 0.0),
-            out_accounts: CollectionConfig::new(1, 5, 1.0),
+            out_accounts: CollectionConfig::new(0, 5, 1.0),
             account_transactions: CollectionConfig::new(0, 3, 0.0),
             transactions: CollectionConfig::new(0, 2, 0.0),
             leaf_nullifications: CollectionConfig::new(0, 3, 0.0),
@@ -299,12 +299,12 @@ async fn assert_output_accounts_persisted(
 
     if state_update.out_accounts.is_empty() {
         // If no accounts expected, verify table is empty
-        let account_count = accounts::Entity::find().count(db_conn).await?;
-        assert_eq!(
-            account_count, 0,
-            "Expected no accounts in database, but found {}",
-            account_count
-        );
+        // let account_count = accounts::Entity::find().count(db_conn).await?;
+        // assert_eq!(
+        //     account_count, 0,
+        //     "Expected no accounts in database, but found {}",
+        //     account_count
+        // );
         return Ok(());
     }
 
@@ -409,50 +409,45 @@ async fn assert_state_tree_root(
     // First, get all leaf nodes from database to verify they match our output accounts
     let leaf_nodes = state_trees::Entity::find()
         .filter(state_trees::Column::Tree.eq(tree_pubkey_bytes.clone()))
-        .filter(state_trees::Column::Level.eq(0i64))  // Leaf level
+        .filter(state_trees::Column::Level.eq(0i64)) // Leaf level
         .all(db_conn)
         .await?;
 
     println!("Database Leaf Hashes:");
     for leaf in &leaf_nodes {
-        println!("  Hash({}) at leaf_idx={:?}", hex::encode(&leaf.hash), leaf.leaf_idx);
+        println!(
+            "  Hash({}) at leaf_idx={:?}",
+            hex::encode(&leaf.hash),
+            leaf.leaf_idx
+        );
     }
 
     // Assert that all our new account hashes are present as leaf nodes in the database
     for account_with_context in &state_update.out_accounts {
         let account_hash = hex::encode(&account_with_context.account.hash.0);
         let leaf_index = account_with_context.account.leaf_index.0;
-        
+
         let found_leaf = leaf_nodes.iter().find(|leaf| {
-            leaf.leaf_idx == Some(leaf_index as i64) && 
-            hex::encode(&leaf.hash) == account_hash
+            leaf.leaf_idx == Some(leaf_index as i64) && hex::encode(&leaf.hash) == account_hash
         });
-        
-        assert!(found_leaf.is_some(), 
-            "Account hash {} at leaf_index {} not found in database leaf nodes", 
-            account_hash, leaf_index);
+
+        assert!(
+            found_leaf.is_some(),
+            "Account hash {} at leaf_index {} not found in database leaf nodes",
+            account_hash,
+            leaf_index
+        );
     }
     println!("✅ All account hashes verified as leaf nodes in database");
 
-    // Construct reference tree from output accounts directly
-    // Find the maximum leaf index to determine tree size needed
-    let max_leaf_idx = state_update.out_accounts
-        .iter()
-        .map(|acc| acc.account.leaf_index.0)
-        .max()
-        .unwrap_or(0);
-        
-    println!("Constructing reference tree up to leaf index {}", max_leaf_idx);
-    
-    // Append leaves to reference tree in the correct positions
-    // Fill with zero hashes for missing leaves, actual account hashes for present ones
-    for i in 0..=max_leaf_idx {
-        let leaf_hash = state_update.out_accounts
-            .iter()
-            .find(|acc| acc.account.leaf_index.0 == i)
-            .map(|acc| acc.account.hash.0)
-            .unwrap_or([0u8; 32]); // Zero hash for missing leaves
-            
+    // Append only the new leaves from current state update to reference tree
+    println!(
+        "Appending {} new leaves from current state update",
+        state_update.out_accounts.len()
+    );
+
+    for account_with_context in &state_update.out_accounts {
+        let leaf_hash = account_with_context.account.hash.0;
         reference_tree.append(&leaf_hash)?;
     }
 
@@ -472,19 +467,26 @@ async fn assert_state_tree_root(
         .filter(|node| node.level == max_level)
         .collect();
 
-    assert_eq!(root_nodes.len(), 1, "Expected exactly 1 root node, found {}", root_nodes.len());
-    
+    assert_eq!(
+        root_nodes.len(),
+        1,
+        "Expected exactly 1 root node, found {}",
+        root_nodes.len()
+    );
+
     let root_node = root_nodes[0];
     let mut db_root_array = [0u8; 32];
     db_root_array.copy_from_slice(&root_node.hash);
     println!("Database root: {}", hex::encode(&db_root_array));
 
     assert_eq!(
-        reference_root, db_root_array,
+        reference_root,
+        db_root_array,
         "State tree root mismatch!\nReference: {}\nDatabase:  {}",
-        hex::encode(&reference_root), hex::encode(&db_root_array)
+        hex::encode(&reference_root),
+        hex::encode(&db_root_array)
     );
-    
+
     println!("✅ State tree root verification successful!");
 
     Ok(())
@@ -566,10 +568,6 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     println!("\n\nconfig structure test seed {}\n\n", seed);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // Initialize reference Merkle tree for state tree root verification
-    let tree_info =
-        TreeInfo::get(TEST_TREE_PUBKEY_STR).expect("Test tree should exist in QUEUE_TREE_MAPPING");
-    let tree_height = tree_info.height as usize;
     let mut reference_tree = MerkleTree::<Poseidon>::new(26, 0);
 
     // Test that the new config structure works correctly
@@ -580,7 +578,7 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     assert_eq!(config.in_accounts.max_entries, 5);
     assert_eq!(config.in_accounts.probability, 0.0);
 
-    assert_eq!(config.out_accounts.min_entries, 1);
+    assert_eq!(config.out_accounts.min_entries, 0);
     assert_eq!(config.out_accounts.max_entries, 5);
     assert_eq!(config.out_accounts.probability, 1.0);
 
@@ -589,32 +587,37 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     assert_eq!(config.transactions.probability, 0.0);
 
     // Test that we can create a state update with incremental values
-    let slot = 1000;
-    let base_seq = 500;
-    let base_leaf_index = 100;
-    let simple_state_update =
-        get_rnd_state_update(&mut rng, &config, slot, base_seq, base_leaf_index);
-    println!("simple_state_update {:?}", simple_state_update);
+    let mut base_seq = 500;
+    let mut base_leaf_index = 0;
+    let num_iters = 1000;
+    for slot in 0..num_iters {
+        println!("iter {}", slot);
+        let simple_state_update =
+            get_rnd_state_update(&mut rng, &config, slot, base_seq, base_leaf_index);
+        println!("simple_state_update {:?}", simple_state_update);
 
-    // Persist the simple state update
-    let result = persist_state_update_and_commit(&setup.db_conn, simple_state_update.clone()).await;
+        // Persist the simple state update
+        let result =
+            persist_state_update_and_commit(&setup.db_conn, simple_state_update.clone()).await;
 
-    // Should complete successfully
-    assert!(
-        result.is_ok(),
-        "Failed to persist simple state update: {:?}",
-        result.err()
-    );
+        // Should complete successfully
+        assert!(
+            result.is_ok(),
+            "Failed to persist simple state update: {:?}",
+            result.err()
+        );
 
-    // Assert that all output accounts were persisted correctly
-    assert_output_accounts_persisted(&setup.db_conn, &simple_state_update)
-        .await
-        .expect("Failed to verify output accounts persistence");
+        // Assert that all output accounts were persisted correctly
+        assert_output_accounts_persisted(&setup.db_conn, &simple_state_update)
+            .await
+            .expect("Failed to verify output accounts persistence");
 
-    // Assert that state tree root matches reference implementation
-    assert_state_tree_root(&setup.db_conn, &mut reference_tree, &simple_state_update)
-        .await
-        .expect("Failed to verify state tree root");
-
+        // Assert that state tree root matches reference implementation
+        assert_state_tree_root(&setup.db_conn, &mut reference_tree, &simple_state_update)
+            .await
+            .expect("Failed to verify state tree root");
+        base_seq += simple_state_update.out_accounts.len() as u64;
+        base_leaf_index += simple_state_update.out_accounts.len() as u64;
+    }
     println!("Config structure test completed successfully - unified CollectionConfig approach with incremental slot/seq/leaf_index working");
 }
