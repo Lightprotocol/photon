@@ -104,7 +104,7 @@ impl Default for StateUpdateConfig {
             account_transactions: CollectionConfig::new(0, 3, 0.0),
             transactions: CollectionConfig::new(0, 2, 0.0),
             leaf_nullifications: CollectionConfig::new(0, 3, 0.0),
-            indexed_merkle_tree_updates: CollectionConfig::new(1, 1, 1.0),
+            indexed_merkle_tree_updates: CollectionConfig::new(0, 3, 1.0),
             batch_nullify_context: CollectionConfig::new(0, 2, 0.0),
             batch_new_addresses: CollectionConfig::new(0, 3, 0.0),
 
@@ -363,7 +363,8 @@ fn get_rnd_state_update(
             config.indexed_merkle_tree_updates.min_entries
                 ..=config.indexed_merkle_tree_updates.max_entries,
         );
-        metadata.indexed_merkle_tree_updates_count = count;
+        let mut base_indexed_seq = base_indexed_seq;
+        // Two tree operations per indexed append
         for i in 0..count {
             let tree = solana_pubkey::pubkey!("amt1Ayt45jfbdw5YSo7iz6WZxUmnZsQTYXy82hVwyC2");
 
@@ -372,32 +373,20 @@ fn get_rnd_state_update(
             value_bytes[0] = 0;
             let value = BigUint::from_bytes_be(&value_bytes);
 
-            // // Find the low element for this value using the indexed array
-            // let (old_low_element, old_low_element_next_value) = indexed_array
-            //     .find_low_element_for_nonexistent(&value)
-            //     .unwrap();
-
-            // // Create the nullifier bundle which contains all the proper elements
-            // let nullifier_bundle = indexed_array
-            //     .new_element_with_low_element_index(old_low_element.index, &value)
-            //     .unwrap();
-
-            // // Use the bundle data to create the update
-            // let leaf_index = nullifier_bundle.new_element.index;
-            // let next_index = nullifier_bundle.new_element.next_index;
-            // let next_value_bytes =
-            //     bigint_to_be_bytes_array::<32>(&nullifier_bundle.new_element_next_value).unwrap();
-
-            // // Compute the proper hash for the indexed element
-            // let hash = nullifier_bundle
-            //     .new_element
-            //     .hash::<Poseidon>(&nullifier_bundle.new_element_next_value)
-            //     .unwrap();
             let nullifier_bundle = indexed_array.append(&value).unwrap();
-            let hash = nullifier_bundle
+
+            // Compute the hash for the new element
+            let new_element_hash = nullifier_bundle
                 .new_element
                 .hash::<Poseidon>(&nullifier_bundle.new_element_next_value)
                 .unwrap();
+
+            // Compute the hash for the low element (after its next_value was updated)
+            let low_element_hash = nullifier_bundle
+                .new_low_element
+                .hash::<Poseidon>(&nullifier_bundle.new_element.value)
+                .unwrap();
+
             reference_indexed_tree
                 .update(
                     &nullifier_bundle.new_low_element,
@@ -405,7 +394,26 @@ fn get_rnd_state_update(
                     &nullifier_bundle.new_element_next_value,
                 )
                 .unwrap();
-            let update = IndexedTreeLeafUpdate {
+            let low_element_update = IndexedTreeLeafUpdate {
+                tree_type: TreeType::AddressV1,
+                tree,
+                leaf: RawIndexedElement {
+                    value: bigint_to_be_bytes_array::<32>(&nullifier_bundle.new_low_element.value)
+                        .unwrap(),
+                    next_index: nullifier_bundle.new_low_element.next_index,
+                    next_value: bigint_to_be_bytes_array::<32>(&nullifier_bundle.new_element.value)
+                        .unwrap(),
+                    index: nullifier_bundle.new_low_element.index,
+                },
+                hash: low_element_hash,
+                seq: base_indexed_seq,
+            };
+            base_indexed_seq += 1;
+            state_update.indexed_merkle_tree_updates.insert(
+                (tree, nullifier_bundle.new_low_element.index as u64),
+                low_element_update,
+            );
+            let new_element_update = IndexedTreeLeafUpdate {
                 tree_type: TreeType::AddressV1,
                 tree,
                 leaf: RawIndexedElement {
@@ -417,13 +425,16 @@ fn get_rnd_state_update(
                     .unwrap(),
                     index: nullifier_bundle.new_element.index,
                 },
-                hash,
-                seq: base_indexed_seq + i as u64,
+                hash: new_element_hash,
+                seq: base_indexed_seq,
             };
-            state_update
-                .indexed_merkle_tree_updates
-                .insert((tree, nullifier_bundle.new_element.index as u64), update);
+            base_indexed_seq += 1;
+            state_update.indexed_merkle_tree_updates.insert(
+                (tree, nullifier_bundle.new_element.index as u64),
+                new_element_update,
+            );
         }
+        metadata.indexed_merkle_tree_updates_count = state_update.indexed_merkle_tree_updates.len();
     }
 
     // Generate batch_nullify_context (Vec<BatchNullifyContext>) for actual input accounts
@@ -986,6 +997,7 @@ async fn assert_indexed_tree_root(
     use photon_indexer::dao::generated::indexed_trees;
     use sea_orm::ColumnTrait;
 
+    // Assert doesn't work because
     // Validate metadata consistency
     assert_eq!(
         state_update.indexed_merkle_tree_updates.len(),

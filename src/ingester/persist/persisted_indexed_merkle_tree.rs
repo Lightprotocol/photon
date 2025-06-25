@@ -356,242 +356,207 @@ pub async fn get_exclusion_range_with_proof_v1(
     Ok((range_node.clone(), leaf_proof))
 }
 
+/// Ensures the zeroeth element (leaf_index 0) exists if not already present
+fn ensure_zeroeth_element_exists(
+    indexed_leaf_updates: &mut HashMap<(Pubkey, u64), IndexedTreeLeafUpdate>,
+    sdk_tree: Pubkey,
+    tree: Pubkey,
+    tree_type: TreeType,
+) -> Result<(), IngesterError> {
+    let zeroeth_update = indexed_leaf_updates.get(&(sdk_tree, 0));
+    if zeroeth_update.is_none() {
+        let (zeroeth_leaf, zeroeth_hash) = match &tree_type {
+            TreeType::AddressV1 => {
+                let leaf = get_zeroeth_exclusion_range_v1(sdk_tree.to_bytes().to_vec());
+                let hash = compute_range_node_hash_v1(&leaf).map_err(|e| {
+                    IngesterError::ParserError(format!(
+                        "Failed to compute zeroeth element hash: {}",
+                        e
+                    ))
+                })?;
+                (leaf, hash)
+            }
+            _ => {
+                let leaf = get_zeroeth_exclusion_range(sdk_tree.to_bytes().to_vec());
+                let hash = compute_range_node_hash(&leaf).map_err(|e| {
+                    IngesterError::ParserError(format!(
+                        "Failed to compute zeroeth element hash: {}",
+                        e
+                    ))
+                })?;
+                (leaf, hash)
+            }
+        };
+
+        indexed_leaf_updates.insert(
+            (sdk_tree, zeroeth_leaf.leaf_index as u64),
+            IndexedTreeLeafUpdate {
+                tree,
+                tree_type,
+                hash: zeroeth_hash.0,
+                leaf: RawIndexedElement {
+                    value: zeroeth_leaf.value.clone().try_into().map_err(|_e| {
+                        IngesterError::ParserError(format!(
+                            "Failed to convert zeroeth element value to array {:?}",
+                            zeroeth_leaf.value
+                        ))
+                    })?,
+                    next_index: zeroeth_leaf.next_index as usize,
+                    next_value: zeroeth_leaf.next_value.try_into().map_err(|_e| {
+                        IngesterError::ParserError(
+                            "Failed to convert zeroeth element next value to array".to_string(),
+                        )
+                    })?,
+                    index: zeroeth_leaf.leaf_index as usize,
+                },
+                seq: 0,
+            },
+        );
+    }
+    Ok(())
+}
+
+/// Ensures the top element (leaf_index 1) exists for V1 trees if not already present
+fn ensure_top_element_exists(
+    indexed_leaf_updates: &mut HashMap<(Pubkey, u64), IndexedTreeLeafUpdate>,
+    sdk_tree: Pubkey,
+    tree: Pubkey,
+    tree_type: TreeType,
+) -> Result<(), IngesterError> {
+    // Check if top element (leaf_index 1) is missing and insert it if needed - ONLY for V1 trees
+    if matches!(tree_type, TreeType::AddressV1) {
+        let top_update = indexed_leaf_updates.get(&(sdk_tree, 1));
+        if top_update.is_none() {
+            let top_leaf = get_top_element(sdk_tree.to_bytes().to_vec());
+            let top_hash = compute_range_node_hash_v1(&top_leaf).map_err(|e| {
+                IngesterError::ParserError(format!("Failed to compute top element hash: {}", e))
+            })?;
+
+            indexed_leaf_updates.insert(
+                (sdk_tree, top_leaf.leaf_index as u64),
+                IndexedTreeLeafUpdate {
+                    tree,
+                    tree_type,
+                    hash: top_hash.0,
+                    leaf: RawIndexedElement {
+                        value: top_leaf.value.clone().try_into().map_err(|_e| {
+                            IngesterError::ParserError(format!(
+                                "Failed to convert top element value to array {:?}",
+                                top_leaf.value
+                            ))
+                        })?,
+                        next_index: top_leaf.next_index as usize,
+                        next_value: top_leaf.next_value.try_into().map_err(|_e| {
+                            IngesterError::ParserError(
+                                "Failed to convert top element next value to array".to_string(),
+                            )
+                        })?,
+                        index: top_leaf.leaf_index as usize,
+                    },
+                    seq: 1,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Creates a low element update from the given parameters
+fn create_low_element_update(
+    low_element: &indexed_trees::Model,
+    tree: Pubkey,
+    tree_type: TreeType,
+    seq: u64,
+) -> Result<IndexedTreeLeafUpdate, IngesterError> {
+    let low_element_hash = match &tree_type {
+        TreeType::AddressV1 => Ok(compute_range_node_hash_v1(low_element)
+            .map_err(|e| {
+                IngesterError::ParserError(format!("Failed to compute low element hash: {}", e))
+            })?
+            .0),
+        TreeType::AddressV2 => Ok(compute_range_node_hash(low_element)
+            .map_err(|e| {
+                IngesterError::ParserError(format!("Failed to compute low element hash: {}", e))
+            })?
+            .0),
+        _ => Err(IngesterError::ParserError(format!(
+            "Invalid tree type: {}",
+            tree_type
+        ))),
+    }?;
+
+    let low_element_update = IndexedTreeLeafUpdate {
+        tree,
+        tree_type,
+        hash: low_element_hash,
+        leaf: RawIndexedElement {
+            value: low_element.value.clone().try_into().map_err(|_e| {
+                IngesterError::ParserError(format!(
+                    "Failed to convert low element value to array {:?}",
+                    low_element.value
+                ))
+            })?,
+            next_index: low_element.next_index as usize,
+            next_value: low_element.next_value.clone().try_into().map_err(|_e| {
+                IngesterError::ParserError(
+                    "Failed to convert low element next value to array".to_string(),
+                )
+            })?,
+            index: low_element.leaf_index as usize,
+        },
+        seq,
+    };
+
+    Ok(low_element_update)
+}
+
+/// Persists indexed Merkle tree updates to the database, maintaining the linked structure
+/// required for indexed trees where each element points to the next element in sorted order.
+///
+/// This function implements indexed Merkle tree operations including both new element
+/// appends and the corresponding low element updates that maintain tree integrity.
+///
+/// ## Steps performed:
+/// 1. **Tree Processing**: Iterate through each unique tree in the updates
+/// 2. **Tree Type Detection**: Determine if tree is V1 (AddressV1/StateV1) or V2 for proper hash computation
+/// 3. **Low Element Updates**:
+///    - Query existing tree state from database to build local view
+///    - For empty trees, initialize with zeroeth and top elements as needed
+///    - For each new element being appended:
+///      - Find the "low element" (largest existing element smaller than new value)
+///      - Update the low element to point to the new element (update its next_index/next_value)
+///      - Configure the new element to point to what the low element was pointing to
+///      - Recompute hashes for the updated low element
+///      - Add low element update to the batch
+/// 4. **Initialization Elements**: Ensure required initialization elements exist:
+///    - Zeroeth element (leaf_index 0): Points to first real element or top element
+///    - Top element (leaf_index 1): Only for V1 trees, represents the maximum value
+/// 5. **Database Persistence**:
+///    - Batch updates into chunks to avoid SQL parameter limits
+///    - Use upsert logic with sequence number checks to handle conflicts
+///    - Insert/update records in indexed_trees table
+/// 6. **State Tree Integration**: Create corresponding leaf nodes for the Merkle tree structure
+///
 pub async fn persist_indexed_tree_updates(
     txn: &DatabaseTransaction,
     mut indexed_leaf_updates: HashMap<(Pubkey, u64), IndexedTreeLeafUpdate>,
 ) -> Result<(), IngesterError> {
-    let trees: HashSet<Pubkey> = indexed_leaf_updates.keys().map(|x| x.0).collect();
+    // Step 1: Tree Processing - Collect unique trees with their types
+    let trees: HashMap<Pubkey, TreeType> = indexed_leaf_updates
+        .values()
+        .map(|update| (update.tree, update.tree_type))
+        .collect();
 
-    for sdk_tree in trees {
-        let tree = Pubkey::new_from_array(sdk_tree.to_bytes());
+    for (tree, tree_type) in trees {
+        let sdk_tree = Pubkey::new_from_array(tree.to_bytes());
 
-        let tree_type = indexed_leaf_updates
-            .values()
-            .find(|update| update.tree == tree)
-            .map(|update| update.tree_type)
-            .ok_or_else(|| {
-                IngesterError::ParserError(format!(
-                    "No indexed tree leaf updates found for tree: {}. Cannot determine tree type.",
-                    tree
-                ))
-            })?;
+        // Step 4: Initialization Elements - Ensure required initialization elements exist
+        ensure_zeroeth_element_exists(&mut indexed_leaf_updates, sdk_tree, tree, tree_type)?;
 
-        // Process low element updates - implement the missing indexed tree logic
-        // Build a local view of the tree to determine what low elements need updating
-        let tree_values: Vec<Vec<u8>> = indexed_leaf_updates
-            .iter()
-            .filter(|((tree_key, _), _)| *tree_key == sdk_tree)
-            .map(|(_, update)| update.leaf.value.to_vec())
-            .collect();
-        
-        if !tree_values.is_empty() {
-            // Query existing tree state
-            let mut indexed_tree = query_next_smallest_elements(txn, tree_values.clone(), sdk_tree.to_bytes().to_vec()).await?;
-            let mut elements_to_update: HashMap<i64, indexed_trees::Model> = HashMap::new();
-
-            // Add initialization elements if tree is empty
-            if indexed_tree.is_empty() {
-                let models = match &tree_type {
-                    TreeType::AddressV1 | TreeType::StateV1 => {
-                        vec![
-                            get_zeroeth_exclusion_range_v1(sdk_tree.to_bytes().to_vec()),
-                            get_top_element(sdk_tree.to_bytes().to_vec()),
-                        ]
-                    }
-                    _ => {
-                        vec![get_zeroeth_exclusion_range(sdk_tree.to_bytes().to_vec())]
-                    }
-                };
-                for model in models {
-                    elements_to_update.insert(model.leaf_index, model.clone());
-                    indexed_tree.insert(model.value.clone(), model);
-                }
-            }
-
-            // Collect low element updates first to avoid borrow checker issues
-            let mut low_element_updates: HashMap<(Pubkey, u64), IndexedTreeLeafUpdate> = HashMap::new();
-            
-            // Process each new element and update the tree structure
-            for ((tree_key, leaf_index), update) in &indexed_leaf_updates {
-                if *tree_key == sdk_tree && *leaf_index > 1 { // Skip initialization elements
-                    let value = update.leaf.value.to_vec();
-                    
-                    // Create the new indexed element
-                    let mut new_element = indexed_trees::Model {
-                        tree: sdk_tree.to_bytes().to_vec(),
-                        leaf_index: *leaf_index as i64,
-                        value: value.clone(),
-                        next_index: 0,
-                        next_value: vec![],
-                        seq: Some(update.seq as i64),
-                    };
-
-                    // Find the low element (largest element smaller than the new value)
-                    let low_element = indexed_tree
-                        .range(..value.clone())
-                        .next_back()
-                        .map(|(_, v)| v.clone());
-
-                    if let Some(mut low_element) = low_element {
-                        // Update the new element to point to what the low element was pointing to
-                        new_element.next_index = low_element.next_index;
-                        new_element.next_value = low_element.next_value.clone();
-
-                        // Update the low element to point to the new element
-                        low_element.next_index = *leaf_index as i64;
-                        low_element.next_value = value.clone();
-
-                        // Create the low element update
-                        let low_element_hash = match &tree_type {
-                            TreeType::AddressV1 | TreeType::StateV1 => {
-                                compute_range_node_hash_v1(&low_element).map_err(|e| {
-                                    IngesterError::ParserError(format!(
-                                        "Failed to compute low element hash: {}",
-                                        e
-                                    ))
-                                })?.0
-                            }
-                            _ => {
-                                compute_range_node_hash(&low_element).map_err(|e| {
-                                    IngesterError::ParserError(format!(
-                                        "Failed to compute low element hash: {}",
-                                        e
-                                    ))
-                                })?.0
-                            }
-                        };
-
-                        let low_element_update = IndexedTreeLeafUpdate {
-                            tree,
-                            tree_type,
-                            hash: low_element_hash,
-                            leaf: RawIndexedElement {
-                                value: low_element.value.clone().try_into().map_err(|_e| {
-                                    IngesterError::ParserError(format!(
-                                        "Failed to convert low element value to array {:?}",
-                                        low_element.value
-                                    ))
-                                })?,
-                                next_index: low_element.next_index as usize,
-                                next_value: low_element.next_value.clone().try_into().map_err(|_e| {
-                                    IngesterError::ParserError(
-                                        "Failed to convert low element next value to array".to_string(),
-                                    )
-                                })?,
-                                index: low_element.leaf_index as usize,
-                            },
-                            seq: update.seq, // Use same sequence as the new element
-                        };
-
-                        // Collect the low element update
-                        low_element_updates.insert(
-                            (sdk_tree, low_element.leaf_index as u64),
-                            low_element_update
-                        );
-
-                        // Update local tree state
-                        elements_to_update.insert(low_element.leaf_index, low_element.clone());
-                        indexed_tree.insert(low_element.value.clone(), low_element);
-                    }
-
-                    // Add the new element to local state
-                    elements_to_update.insert(new_element.leaf_index, new_element.clone());
-                    indexed_tree.insert(value, new_element);
-                }
-            }
-            
-            // Apply the low element updates
-            indexed_leaf_updates.extend(low_element_updates);
-        }
-
-        // Check if zeroeth element (leaf_index 0) is missing and insert it if needed
-        let zeroeth_update = indexed_leaf_updates.get(&(sdk_tree, 0));
-        if zeroeth_update.is_none() {
-            let (zeroeth_leaf, zeroeth_hash) = match &tree_type {
-                TreeType::AddressV1 | TreeType::StateV1 => {
-                    let leaf = get_zeroeth_exclusion_range_v1(sdk_tree.to_bytes().to_vec());
-                    let hash = compute_range_node_hash_v1(&leaf).map_err(|e| {
-                        IngesterError::ParserError(format!(
-                            "Failed to compute zeroeth element hash: {}",
-                            e
-                        ))
-                    })?;
-                    (leaf, hash)
-                }
-                _ => {
-                    let leaf = get_zeroeth_exclusion_range(sdk_tree.to_bytes().to_vec());
-                    let hash = compute_range_node_hash(&leaf).map_err(|e| {
-                        IngesterError::ParserError(format!(
-                            "Failed to compute zeroeth element hash: {}",
-                            e
-                        ))
-                    })?;
-                    (leaf, hash)
-                }
-            };
-
-            indexed_leaf_updates.insert(
-                (sdk_tree, zeroeth_leaf.leaf_index as u64),
-                IndexedTreeLeafUpdate {
-                    tree,
-                    tree_type,
-                    hash: zeroeth_hash.0,
-                    leaf: RawIndexedElement {
-                        value: zeroeth_leaf.value.clone().try_into().map_err(|_e| {
-                            IngesterError::ParserError(format!(
-                                "Failed to convert zeroeth element value to array {:?}",
-                                zeroeth_leaf.value
-                            ))
-                        })?,
-                        next_index: zeroeth_leaf.next_index as usize,
-                        next_value: zeroeth_leaf.next_value.try_into().map_err(|_e| {
-                            IngesterError::ParserError(
-                                "Failed to convert zeroeth element next value to array".to_string(),
-                            )
-                        })?,
-                        index: zeroeth_leaf.leaf_index as usize,
-                    },
-                    seq: 0,
-                },
-            );
-        }
-
-        // Check if top element (leaf_index 1) is missing and insert it if needed - ONLY for V1 trees
-        if matches!(tree_type, TreeType::AddressV1) {
-            let top_update = indexed_leaf_updates.get(&(sdk_tree, 1));
-            if top_update.is_none() {
-                let top_leaf = get_top_element(sdk_tree.to_bytes().to_vec());
-                let top_hash = compute_range_node_hash_v1(&top_leaf).map_err(|e| {
-                    IngesterError::ParserError(format!("Failed to compute top element hash: {}", e))
-                })?;
-
-                indexed_leaf_updates.insert(
-                    (sdk_tree, top_leaf.leaf_index as u64),
-                    IndexedTreeLeafUpdate {
-                        tree,
-                        tree_type,
-                        hash: top_hash.0,
-                        leaf: RawIndexedElement {
-                            value: top_leaf.value.clone().try_into().map_err(|_e| {
-                                IngesterError::ParserError(format!(
-                                    "Failed to convert top element value to array {:?}",
-                                    top_leaf.value
-                                ))
-                            })?,
-                            next_index: top_leaf.next_index as usize,
-                            next_value: top_leaf.next_value.try_into().map_err(|_e| {
-                                IngesterError::ParserError(
-                                    "Failed to convert top element next value to array".to_string(),
-                                )
-                            })?,
-                            index: top_leaf.leaf_index as usize,
-                        },
-                        seq: 1,
-                    },
-                );
-            }
-        }
+        ensure_top_element_exists(&mut indexed_leaf_updates, sdk_tree, tree, tree_type)?;
     }
+
+    // Step 5: Database Persistence - Batch updates and insert/update records
     let chunks = indexed_leaf_updates
         .values()
         .chunks(MAX_SQL_INSERTS)
@@ -631,6 +596,7 @@ pub async fn persist_indexed_tree_updates(
             IngesterError::DatabaseError(format!("Failed to insert indexed tree elements: {}", e))
         })?;
 
+        // Step 6: State Tree Integration - Create corresponding leaf nodes for the Merkle tree structure
         let state_tree_leaf_nodes = chunk
             .iter()
             .map(|x| {
@@ -687,10 +653,11 @@ pub async fn multi_append(
         None => 0,
     };
 
-    let mut indexed_tree = query_next_smallest_elements(txn, values.clone(), tree.clone()).await?;
+    let mut local_tmp_indexed_tree =
+        query_next_smallest_elements(txn, values.clone(), tree.clone()).await?;
     let mut elements_to_update: HashMap<i64, indexed_trees::Model> = HashMap::new();
 
-    if indexed_tree.is_empty() {
+    if local_tmp_indexed_tree.is_empty() {
         let models = if tree_height == TREE_HEIGHT_V1 + 1 {
             vec![
                 get_zeroeth_exclusion_range_v1(tree.clone()),
@@ -701,7 +668,7 @@ pub async fn multi_append(
         };
         for model in models {
             elements_to_update.insert(model.leaf_index, model.clone());
-            indexed_tree.insert(model.value.clone(), model);
+            local_tmp_indexed_tree.insert(model.value.clone(), model);
         }
     }
 
@@ -716,7 +683,7 @@ pub async fn multi_append(
             seq: seq.map(|s| s as i64),
         };
 
-        let next_largest = indexed_tree
+        let next_largest = local_tmp_indexed_tree
             .range(..value.clone()) // This ranges from the start up to, but not including, `key`
             .next_back() // Gets the last element in the range, which is the largest key less than `key`
             .map(|(_, v)| v.clone());
@@ -729,10 +696,10 @@ pub async fn multi_append(
             next_largest.next_value = value.clone();
 
             elements_to_update.insert(next_largest.leaf_index, next_largest.clone());
-            indexed_tree.insert(next_largest.value.clone(), next_largest);
+            local_tmp_indexed_tree.insert(next_largest.value.clone(), next_largest);
         }
         elements_to_update.insert(current_index, indexed_element.clone());
-        indexed_tree.insert(value, indexed_element);
+        local_tmp_indexed_tree.insert(value, indexed_element);
     }
 
     let active_elements: Vec<indexed_trees::ActiveModel> = elements_to_update
@@ -852,7 +819,7 @@ where
         _ => unimplemented!(),
     };
 
-    let mut indexed_tree: BTreeMap<Vec<u8>, indexed_trees::Model> = BTreeMap::new();
+    let mut local_tmp_indexed_tree: BTreeMap<Vec<u8>, indexed_trees::Model> = BTreeMap::new();
     for row in response {
         let model = indexed_trees::Model {
             tree: row.try_get("", "tree")?,
@@ -862,9 +829,9 @@ where
             next_value: row.try_get("", "next_value")?,
             seq: row.try_get("", "seq")?,
         };
-        indexed_tree.insert(model.value.clone(), model);
+        local_tmp_indexed_tree.insert(model.value.clone(), model);
     }
-    Ok(indexed_tree)
+    Ok(local_tmp_indexed_tree)
 }
 
 pub fn format_bytes(bytes: Vec<u8>, database_backend: DatabaseBackend) -> String {

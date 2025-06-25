@@ -14,6 +14,8 @@ pub enum IngesterError {
     EmptyBatchEvent,
     #[error("Invalid event.")]
     InvalidEvent,
+    #[error("Low element not found.")]
+    LowElementNotFound,
 }
 
 impl From<sea_orm::error::DbErr> for IngesterError {
