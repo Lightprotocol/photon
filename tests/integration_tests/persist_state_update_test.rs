@@ -56,7 +56,7 @@ impl CollectionConfig {
 #[derive(Debug, Clone)]
 pub struct StateUpdateConfig {
     // Collection configurations for StateUpdate fields
-    pub in_accounts: CollectionConfig,
+    pub in_accounts_v1: CollectionConfig,
     pub out_accounts_v1: CollectionConfig,
     pub out_accounts_v2: CollectionConfig,
     pub account_transactions: CollectionConfig,
@@ -78,7 +78,7 @@ pub struct StateUpdateConfig {
 impl Default for StateUpdateConfig {
     fn default() -> Self {
         Self {
-            in_accounts: CollectionConfig::new(0, 5, 0.0),
+            in_accounts_v1: CollectionConfig::new(0, 3, 0.3),
             out_accounts_v1: CollectionConfig::new(0, 5, 1.0),
             out_accounts_v2: CollectionConfig::new(0, 5, 1.0),
             account_transactions: CollectionConfig::new(0, 3, 0.0),
@@ -106,14 +106,26 @@ fn get_rnd_state_update(
     base_seq: u64,
     base_leaf_index_v1: u64,
     base_leaf_index_v2: u64,
+    v1_available_accounts_for_spending: &mut Vec<Hash>,
 ) -> StateUpdate {
     let mut state_update = StateUpdate::default();
 
-    // Generate in_accounts (HashSet<Hash>)
-    if rng.gen_bool(config.in_accounts.probability) {
-        let count = rng.gen_range(config.in_accounts.min_entries..=config.in_accounts.max_entries);
+    // Generate in_accounts (HashSet<Hash>) - v1 accounts that will be spent
+    if !v1_available_accounts_for_spending.is_empty()
+        && rng.gen_bool(config.in_accounts_v1.probability)
+    {
+        let max_to_spend = config
+            .in_accounts_v1
+            .max_entries
+            .min(v1_available_accounts_for_spending.len());
+        let count = rng.gen_range(config.in_accounts_v1.min_entries..=max_to_spend);
+
         for _i in 0..count {
-            state_update.in_accounts.insert(Hash::new_unique());
+            if !v1_available_accounts_for_spending.is_empty() {
+                let index = rng.gen_range(0..v1_available_accounts_for_spending.len());
+                let account_hash = v1_available_accounts_for_spending.remove(index);
+                state_update.in_accounts.insert(account_hash);
+            }
         }
     }
 
@@ -358,6 +370,32 @@ async fn persist_state_update_and_commit(
     Ok(())
 }
 
+/// Helper function to fetch pre-existing account models for input accounts
+async fn fetch_pre_existing_input_models(
+    db_conn: &DatabaseConnection,
+    state_update: &StateUpdate,
+) -> Result<Vec<photon_indexer::dao::generated::accounts::Model>, Box<dyn std::error::Error>> {
+    use photon_indexer::dao::generated::accounts;
+    use sea_orm::ColumnTrait;
+
+    if state_update.in_accounts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let input_hashes: Vec<Vec<u8>> = state_update
+        .in_accounts
+        .iter()
+        .map(|hash| hash.0.to_vec())
+        .collect();
+
+    let models = accounts::Entity::find()
+        .filter(accounts::Column::Hash.is_in(input_hashes))
+        .all(db_conn)
+        .await?;
+
+    Ok(models)
+}
+
 /// Assert that all output accounts from the state update were inserted correctly into the database
 async fn assert_output_accounts_persisted(
     db_conn: &DatabaseConnection,
@@ -444,6 +482,72 @@ async fn assert_output_accounts_persisted(
     );
     println!("Database accounts: {:?}", db_accounts);
     println!("Expected accounts: {:?}", expected_models_sorted);
+    Ok(())
+}
+
+/// Assert that all input accounts from the state update were marked as spent in the database
+/// This function compares the complete account models, not just the spent flag
+async fn assert_input_accounts_persisted(
+    db_conn: &DatabaseConnection,
+    state_update: &StateUpdate,
+    pre_existing_models: &[photon_indexer::dao::generated::accounts::Model],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use photon_indexer::dao::generated::accounts;
+    use sea_orm::ColumnTrait;
+
+    if state_update.in_accounts.is_empty() {
+        println!("✅ No input accounts - skipping input accounts verification");
+        return Ok(());
+    }
+
+    // Create expected models from pre-existing models with spent=true, prev_spent=original spent
+    let mut expected_models: Vec<accounts::Model> = pre_existing_models
+        .iter()
+        .map(|model| {
+            accounts::Model {
+                spent: true,     // Should be marked as spent
+                ..model.clone()  // All other fields should remain the same
+            }
+        })
+        .collect();
+
+    // Sort by hash for consistent comparison
+    expected_models.sort_by(|a, b| a.hash.cmp(&b.hash));
+
+    // Query database for accounts with matching hashes
+    let input_hashes: Vec<Vec<u8>> = state_update
+        .in_accounts
+        .iter()
+        .map(|hash| hash.0.to_vec())
+        .collect();
+
+    let mut db_accounts = accounts::Entity::find()
+        .filter(accounts::Column::Hash.is_in(input_hashes))
+        .all(db_conn)
+        .await?;
+
+    // Sort by hash for consistent comparison
+    db_accounts.sort_by(|a, b| a.hash.cmp(&b.hash));
+
+    // Verify we found all input accounts
+    assert_eq!(
+        db_accounts.len(),
+        expected_models.len(),
+        "Expected {} input accounts in database, found {}",
+        expected_models.len(),
+        db_accounts.len()
+    );
+
+    // Single assert comparing the complete models
+    assert_eq!(
+        db_accounts, expected_models,
+        "Input accounts do not match expected complete models after spending"
+    );
+
+    println!(
+        "✅ Successfully verified {} input accounts were marked as spent with complete models",
+        db_accounts.len()
+    );
     Ok(())
 }
 
@@ -694,9 +798,9 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     let config = StateUpdateConfig::default();
 
     // Verify config structure values
-    assert_eq!(config.in_accounts.min_entries, 0);
-    assert_eq!(config.in_accounts.max_entries, 5);
-    assert_eq!(config.in_accounts.probability, 0.0);
+    assert_eq!(config.in_accounts_v1.min_entries, 0);
+    assert_eq!(config.in_accounts_v1.max_entries, 3);
+    assert_eq!(config.in_accounts_v1.probability, 0.3);
 
     assert_eq!(config.out_accounts_v1.min_entries, 0);
     assert_eq!(config.out_accounts_v1.max_entries, 5);
@@ -714,7 +818,8 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     let mut base_seq = 500;
     let mut base_leaf_index_v1 = 0;
     let mut base_leaf_index_v2 = 1000; // Use separate leaf index space for v2
-    let num_iters = 10;
+    let mut v1_available_accounts_for_spending: Vec<Hash> = Vec::new();
+    let num_iters = 100;
     for slot in 0..num_iters {
         println!("iter {}", slot);
         let simple_state_update = get_rnd_state_update(
@@ -724,8 +829,15 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
             base_seq,
             base_leaf_index_v1,
             base_leaf_index_v2,
+            &mut v1_available_accounts_for_spending,
         );
         println!("simple_state_update {:?}", simple_state_update);
+
+        // Fetch pre-existing account models for input accounts before persisting
+        let pre_existing_input_models =
+            fetch_pre_existing_input_models(setup.db_conn.as_ref(), &simple_state_update)
+                .await
+                .expect("Failed to fetch pre-existing input accounts");
 
         // Persist the simple state update
         let result =
@@ -743,25 +855,47 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
             .await
             .expect("Failed to verify output accounts persistence");
 
+        // Assert that all input accounts were marked as spent with complete models
+        assert_input_accounts_persisted(
+            &setup.db_conn,
+            &simple_state_update,
+            &pre_existing_input_models,
+        )
+        .await
+        .expect("Failed to verify input accounts persistence");
+
         // Assert that state tree root matches reference implementation
         assert_state_tree_root(&setup.db_conn, &mut reference_tree, &simple_state_update)
             .await
             .expect("Failed to verify state tree root");
-        // Update leaf indices separately for v1 and v2
-        let v1_count = simple_state_update
-            .out_accounts
-            .iter()
-            .filter(|acc| acc.context.tree_type == TreeType::StateV1 as u16)
-            .count() as u64;
-        let v2_count = simple_state_update
-            .out_accounts
-            .iter()
-            .filter(|acc| acc.context.tree_type == TreeType::StateV2 as u16)
-            .count() as u64;
 
-        base_seq += simple_state_update.out_accounts.len() as u64;
-        base_leaf_index_v1 += v1_count;
-        base_leaf_index_v2 += v2_count;
+        {
+            // Collect new v1 output accounts for future spending
+            let new_v1_accounts: Vec<Hash> = simple_state_update
+                .out_accounts
+                .iter()
+                .filter(|acc| acc.context.tree_type == TreeType::StateV1 as u16)
+                .map(|acc| acc.account.hash.clone())
+                .collect();
+            v1_available_accounts_for_spending.extend(new_v1_accounts.iter().cloned());
+
+            // Update leaf indices separately for v1 and v2
+            let v1_count = new_v1_accounts.len() as u64;
+            let v2_count = simple_state_update
+                .out_accounts
+                .iter()
+                .filter(|acc| acc.context.tree_type == TreeType::StateV2 as u16)
+                .count() as u64;
+
+            base_seq += simple_state_update.out_accounts.len() as u64;
+            base_leaf_index_v1 += v1_count;
+            base_leaf_index_v2 += v2_count;
+
+            println!(
+                "Available accounts for spending: {}",
+                v1_available_accounts_for_spending.len()
+            );
+        }
     }
     println!("Config structure test completed successfully - unified CollectionConfig approach with incremental slot/seq/leaf_index working");
 }
