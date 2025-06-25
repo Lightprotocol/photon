@@ -29,10 +29,10 @@ use serial_test::serial;
 use solana_sdk::signature::Signature;
 use std::env;
 
-// Use the specific tree from QUEUE_TREE_MAPPING
+// Use the specific trees from QUEUE_TREE_MAPPING
 const V1_TEST_TREE_PUBKEY_STR: &str = "smt1NamzXdq4AMqS2fS2F1i5KTYPZRhoHgWx38d8WsT";
 const V2_TEST_TREE_PUBKEY_STR: &str = "HLKs5NJ8FXkJg8BrzJt56adFYYuwg5etzDtBbQYTsixu";
-const V2_TEST_QUEUE_PUBKEY_STR: &str = "HLKs5NJ8FXkJg8BrzJt56adFYYuwg5etzDtBbQYTsixu";
+const V2_TEST_QUEUE_PUBKEY_STR: &str = "6L7SzhYB3anwEQ9cphpJ1U7Scwj57bx2xueReg7R9cKU";
 
 /// Configuration for generating random collections
 #[derive(Debug, Clone)]
@@ -104,7 +104,8 @@ fn get_rnd_state_update(
     config: &StateUpdateConfig,
     slot: u64,
     base_seq: u64,
-    base_leaf_index: u64,
+    base_leaf_index_v1: u64,
+    base_leaf_index_v2: u64,
 ) -> StateUpdate {
     let mut state_update = StateUpdate::default();
 
@@ -152,13 +153,15 @@ fn get_rnd_state_update(
                             as u64,
                     ),
                     tree: SerializablePubkey::from(test_tree_pubkey),
-                    leaf_index: UnsignedInteger(base_leaf_index + i as u64),
+                    leaf_index: UnsignedInteger(base_leaf_index_v1 + i as u64),
                     seq: Some(UnsignedInteger(base_seq + i as u64)),
                     slot_created: UnsignedInteger(slot),
                 },
                 context: AccountContext {
                     tree_type: TreeType::StateV1 as u16,
                     queue: tree_info.queue.into(),
+                    tx_hash: None, // V1 accounts never have tx_hash
+                    in_output_queue: false, // V1 accounts don't use output queues
                     ..Default::default()
                 },
             };
@@ -202,16 +205,16 @@ fn get_rnd_state_update(
                             as u64,
                     ),
                     tree: SerializablePubkey::from(test_tree_pubkey),
-                    leaf_index: UnsignedInteger(base_leaf_index + i as u64),
-                    seq: Some(UnsignedInteger(base_seq + i as u64)),
+                    leaf_index: UnsignedInteger(base_leaf_index_v2 + i as u64),
+                    seq: None, // V2 accounts in output queue don't have seq initially
                     slot_created: UnsignedInteger(slot),
                 },
                 context: AccountContext {
                     tree_type: TreeType::StateV2 as u16,
                     queue: tree_info.queue.into(),
-                    in_output_queue: true,
+                    in_output_queue: true, // V2 accounts use output queues
                     tx_hash: if rng.gen_bool(0.5) {
-                        Some(rng.gen::<[u8; 32]>().into())
+                        Some(Hash::new_unique()) // Generate proper Hash for V2
                     } else {
                         None
                     },
@@ -275,7 +278,7 @@ fn get_rnd_state_update(
             rng.fill(&mut sig_bytes);
             state_update.leaf_nullifications.insert(LeafNullification {
                 tree: test_tree_pubkey,
-                leaf_index: base_leaf_index + i as u64,
+                leaf_index: base_leaf_index_v1 + i as u64,
                 seq: base_seq + i as u64,
                 signature: Signature::from(sig_bytes),
             });
@@ -290,14 +293,14 @@ fn get_rnd_state_update(
         );
         for i in 0..count {
             let tree = test_tree_pubkey;
-            let index = base_leaf_index + i as u64;
+            let index = base_leaf_index_v1 + i as u64;
             let update = IndexedTreeLeafUpdate {
                 tree,
                 leaf: RawIndexedElement {
                     value: rng.gen::<[u8; 32]>(),
                     next_index: rng.gen::<u32>() as usize,
                     next_value: rng.gen::<[u8; 32]>(),
-                    index: (base_leaf_index + i as u64) as usize,
+                    index: (base_leaf_index_v1 + i as u64) as usize,
                 },
                 hash: rng.gen::<[u8; 32]>(),
                 seq: base_seq + i as u64,
@@ -457,29 +460,54 @@ async fn assert_state_tree_root(
         return Ok(());
     }
 
-    // Get the tree pubkey from the first output account (all should use same tree)
-    let tree_pubkey_bytes = state_update.out_accounts[0]
+    // For now, only verify v1 accounts since we're using a single reference tree
+    // Filter to only v1 accounts for tree root verification
+    let v1_accounts: Vec<_> = state_update.out_accounts.iter()
+        .filter(|acc| acc.context.tree_type == TreeType::StateV1 as u16)
+        .collect();
+    
+    if v1_accounts.is_empty() {
+        println!("✅ No v1 output accounts - skipping state tree root verification");
+        return Ok(());
+    }
+
+    // Get the tree pubkey from the first v1 output account
+    let tree_pubkey_bytes = v1_accounts[0]
         .account
         .tree
         .0
         .to_bytes()
         .to_vec();
 
-    println!("Output Account Hashes:");
-    for account_with_context in &state_update.out_accounts {
+    println!("V1 Account Hashes (should be in tree):");
+    for account_with_context in &v1_accounts {
         let account_hash = hex::encode(account_with_context.account.hash.0);
         let leaf_index = account_with_context.account.leaf_index.0;
-        println!("  Hash({}) at leaf_index {}", account_hash, leaf_index);
+        println!("  V1 Hash({}) at leaf_index {}", account_hash, leaf_index);
     }
 
-    // First, get all leaf nodes from database to verify they match our output accounts
+    // Also log V2 accounts for visibility (these go to output queue)
+    let v2_accounts: Vec<_> = state_update.out_accounts.iter()
+        .filter(|acc| acc.context.tree_type == TreeType::StateV2 as u16)
+        .collect();
+    
+    if !v2_accounts.is_empty() {
+        println!("V2 Account Hashes (go to output queue, not tree directly):");
+        for account_with_context in &v2_accounts {
+            let account_hash = hex::encode(account_with_context.account.hash.0);
+            let leaf_index = account_with_context.account.leaf_index.0;
+            println!("  V2 Hash({}) at leaf_index {}", account_hash, leaf_index);
+        }
+    }
+
+    // First, get all leaf nodes from database to verify they match our V1 output accounts
     let leaf_nodes = state_trees::Entity::find()
         .filter(state_trees::Column::Tree.eq(tree_pubkey_bytes.clone()))
         .filter(state_trees::Column::Level.eq(0i64)) // Leaf level
         .all(db_conn)
         .await?;
 
-    println!("Database Leaf Hashes:");
+    println!("Database Leaf Hashes (for V1 tree):");
     for leaf in &leaf_nodes {
         println!(
             "  Hash({}) at leaf_idx={:?}",
@@ -488,8 +516,8 @@ async fn assert_state_tree_root(
         );
     }
 
-    // Assert that all our new account hashes are present as leaf nodes in the database
-    for account_with_context in &state_update.out_accounts {
+    // Assert that all our V1 account hashes are present as leaf nodes in the database
+    for account_with_context in &v1_accounts {
         let account_hash = hex::encode(&account_with_context.account.hash.0);
         let leaf_index = account_with_context.account.leaf_index.0;
 
@@ -499,20 +527,43 @@ async fn assert_state_tree_root(
 
         assert!(
             found_leaf.is_some(),
-            "Account hash {} at leaf_index {} not found in database leaf nodes",
+            "V1 account hash {} at leaf_index {} not found in database leaf nodes",
             account_hash,
             leaf_index
         );
     }
-    println!("✅ All account hashes verified as leaf nodes in database");
+    println!("✅ All V1 account hashes verified as leaf nodes in database");
 
-    // Append only the new leaves from current state update to reference tree
+    // Verify V2 accounts are NOT in the state tree (they should be in output queue only)
+    if !v2_accounts.is_empty() {
+        println!("Verifying V2 accounts are NOT in state tree (should be in output queue only):");
+        for account_with_context in &v2_accounts {
+            let account_hash = hex::encode(&account_with_context.account.hash.0);
+            let leaf_index = account_with_context.account.leaf_index.0;
+
+            let found_leaf = leaf_nodes.iter().find(|leaf| {
+                hex::encode(&leaf.hash) == account_hash
+            });
+
+            assert!(
+                found_leaf.is_none(),
+                "V2 account hash {} should NOT be found in state tree leaf nodes (should be in output queue only), but was found at leaf_idx={:?}",
+                account_hash,
+                found_leaf.map(|leaf| leaf.leaf_idx)
+            );
+            
+            println!("  ✅ V2 Hash({}) correctly NOT in state tree (in output queue)", account_hash);
+        }
+        println!("✅ All V2 account hashes verified as NOT in state tree (correctly in output queue)");
+    }
+
+    // Append only the V1 leaves from current state update to reference tree
     println!(
-        "Appending {} new leaves from current state update",
-        state_update.out_accounts.len()
+        "Appending {} V1 leaves from current state update to reference tree",
+        v1_accounts.len()
     );
 
-    for account_with_context in &state_update.out_accounts {
+    for account_with_context in &v1_accounts {
         let leaf_hash = account_with_context.account.hash.0;
         reference_tree.append(&leaf_hash)?;
     }
@@ -648,18 +699,23 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     assert_eq!(config.out_accounts_v1.max_entries, 5);
     assert_eq!(config.out_accounts_v1.probability, 1.0);
 
+    assert_eq!(config.out_accounts_v2.min_entries, 0);
+    assert_eq!(config.out_accounts_v2.max_entries, 5);
+    assert_eq!(config.out_accounts_v2.probability, 1.0);
+
     assert_eq!(config.transactions.min_entries, 0);
     assert_eq!(config.transactions.max_entries, 2);
     assert_eq!(config.transactions.probability, 0.0);
 
     // Test that we can create a state update with incremental values
     let mut base_seq = 500;
-    let mut base_leaf_index = 0;
+    let mut base_leaf_index_v1 = 0;
+    let mut base_leaf_index_v2 = 1000; // Use separate leaf index space for v2
     let num_iters = 10;
     for slot in 0..num_iters {
         println!("iter {}", slot);
         let simple_state_update =
-            get_rnd_state_update(&mut rng, &config, slot, base_seq, base_leaf_index);
+            get_rnd_state_update(&mut rng, &config, slot, base_seq, base_leaf_index_v1, base_leaf_index_v2);
         println!("simple_state_update {:?}", simple_state_update);
 
         // Persist the simple state update
@@ -682,8 +738,17 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
         assert_state_tree_root(&setup.db_conn, &mut reference_tree, &simple_state_update)
             .await
             .expect("Failed to verify state tree root");
+        // Update leaf indices separately for v1 and v2
+        let v1_count = simple_state_update.out_accounts.iter()
+            .filter(|acc| acc.context.tree_type == TreeType::StateV1 as u16)
+            .count() as u64;
+        let v2_count = simple_state_update.out_accounts.iter()
+            .filter(|acc| acc.context.tree_type == TreeType::StateV2 as u16)
+            .count() as u64;
+        
         base_seq += simple_state_update.out_accounts.len() as u64;
-        base_leaf_index += simple_state_update.out_accounts.len() as u64;
+        base_leaf_index_v1 += v1_count;
+        base_leaf_index_v2 += v2_count;
     }
     println!("Config structure test completed successfully - unified CollectionConfig approach with incremental slot/seq/leaf_index working");
 }
