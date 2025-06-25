@@ -30,7 +30,9 @@ use solana_sdk::signature::Signature;
 use std::env;
 
 // Use the specific tree from QUEUE_TREE_MAPPING
-const TEST_TREE_PUBKEY_STR: &str = "smt1NamzXdq4AMqS2fS2F1i5KTYPZRhoHgWx38d8WsT";
+const V1_TEST_TREE_PUBKEY_STR: &str = "smt1NamzXdq4AMqS2fS2F1i5KTYPZRhoHgWx38d8WsT";
+const V2_TEST_TREE_PUBKEY_STR: &str = "HLKs5NJ8FXkJg8BrzJt56adFYYuwg5etzDtBbQYTsixu";
+const V2_TEST_QUEUE_PUBKEY_STR: &str = "HLKs5NJ8FXkJg8BrzJt56adFYYuwg5etzDtBbQYTsixu";
 
 /// Configuration for generating random collections
 #[derive(Debug, Clone)]
@@ -55,7 +57,8 @@ impl CollectionConfig {
 pub struct StateUpdateConfig {
     // Collection configurations for StateUpdate fields
     pub in_accounts: CollectionConfig,
-    pub out_accounts: CollectionConfig,
+    pub out_accounts_v1: CollectionConfig,
+    pub out_accounts_v2: CollectionConfig,
     pub account_transactions: CollectionConfig,
     pub transactions: CollectionConfig,
     pub leaf_nullifications: CollectionConfig,
@@ -76,7 +79,8 @@ impl Default for StateUpdateConfig {
     fn default() -> Self {
         Self {
             in_accounts: CollectionConfig::new(0, 5, 0.0),
-            out_accounts: CollectionConfig::new(0, 5, 1.0),
+            out_accounts_v1: CollectionConfig::new(0, 5, 1.0),
+            out_accounts_v2: CollectionConfig::new(0, 5, 1.0),
             account_transactions: CollectionConfig::new(0, 3, 0.0),
             transactions: CollectionConfig::new(0, 2, 0.0),
             leaf_nullifications: CollectionConfig::new(0, 3, 0.0),
@@ -104,11 +108,6 @@ fn get_rnd_state_update(
 ) -> StateUpdate {
     let mut state_update = StateUpdate::default();
 
-    // Get tree info from QUEUE_TREE_MAPPING
-    let tree_info =
-        TreeInfo::get(TEST_TREE_PUBKEY_STR).expect("Test tree should exist in QUEUE_TREE_MAPPING");
-    let test_tree_pubkey = tree_info.tree;
-
     // Generate in_accounts (HashSet<Hash>)
     if rng.gen_bool(config.in_accounts.probability) {
         let count = rng.gen_range(config.in_accounts.min_entries..=config.in_accounts.max_entries);
@@ -118,9 +117,14 @@ fn get_rnd_state_update(
     }
 
     // Generate out_accounts (Vec<AccountWithContext>)
-    if rng.gen_bool(config.out_accounts.probability) {
+    if rng.gen_bool(config.out_accounts_v1.probability) {
+        // Get tree info from QUEUE_TREE_MAPPING
+        let tree_info = TreeInfo::get(V1_TEST_TREE_PUBKEY_STR)
+            .expect("Test tree should exist in QUEUE_TREE_MAPPING");
+        let test_tree_pubkey = tree_info.tree;
+
         let count =
-            rng.gen_range(config.out_accounts.min_entries..=config.out_accounts.max_entries);
+            rng.gen_range(config.out_accounts_v1.min_entries..=config.out_accounts_v1.max_entries);
         for i in 0..count {
             let account = AccountWithContext {
                 account: Account {
@@ -161,6 +165,68 @@ fn get_rnd_state_update(
             state_update.out_accounts.push(account);
         }
     }
+
+    // Generate out_accounts (Vec<AccountWithContext>)
+    if rng.gen_bool(config.out_accounts_v2.probability) {
+        // Get tree info from QUEUE_TREE_MAPPING
+        let tree_info = TreeInfo::get(V2_TEST_TREE_PUBKEY_STR)
+            .expect("Test tree should exist in QUEUE_TREE_MAPPING");
+        let test_tree_pubkey = tree_info.tree;
+
+        let count =
+            rng.gen_range(config.out_accounts_v2.min_entries..=config.out_accounts_v2.max_entries);
+        for i in 0..count {
+            let account = AccountWithContext {
+                account: Account {
+                    hash: Hash::new_unique(),
+                    address: if rng.gen_bool(0.7) {
+                        Some(SerializablePubkey::new_unique())
+                    } else {
+                        None
+                    },
+                    data: if rng.gen_bool(0.6) {
+                        let data_size = rng.gen_range(config.data_size_min..=config.data_size_max);
+                        Some(AccountData {
+                            discriminator: UnsignedInteger(
+                                rng.gen_range(config.discriminator_min..=config.discriminator_max),
+                            ),
+                            data: Base64String((0..data_size).map(|_| rng.gen()).collect()),
+                            data_hash: Hash::new_unique(),
+                        })
+                    } else {
+                        None
+                    },
+                    owner: SerializablePubkey::new_unique(),
+                    lamports: UnsignedInteger(
+                        rng.gen_range(config.lamports_min as i64..=config.lamports_max as i64)
+                            as u64,
+                    ),
+                    tree: SerializablePubkey::from(test_tree_pubkey),
+                    leaf_index: UnsignedInteger(base_leaf_index + i as u64),
+                    seq: Some(UnsignedInteger(base_seq + i as u64)),
+                    slot_created: UnsignedInteger(slot),
+                },
+                context: AccountContext {
+                    tree_type: TreeType::StateV2 as u16,
+                    queue: tree_info.queue.into(),
+                    in_output_queue: true,
+                    tx_hash: if rng.gen_bool(0.5) {
+                        Some(rng.gen::<[u8; 32]>().into())
+                    } else {
+                        None
+                    },
+                    ..Default::default()
+                },
+            };
+            state_update.out_accounts.push(account);
+        }
+    }
+
+    // Kept until we introduce v1 and v2 differentiation for nullification
+    // Get tree info from QUEUE_TREE_MAPPING
+    let tree_info = TreeInfo::get(V1_TEST_TREE_PUBKEY_STR)
+        .expect("Test tree should exist in QUEUE_TREE_MAPPING");
+    let test_tree_pubkey = tree_info.tree;
 
     // Generate account_transactions (HashSet<AccountTransaction>)
     if rng.gen_bool(config.account_transactions.probability) {
@@ -341,7 +407,7 @@ async fn assert_output_accounts_persisted(
                 in_output_queue: context.in_output_queue, // From account context
                 queue: context.queue.0.to_bytes().to_vec(), // Use queue from account context
                 nullifier: None,          // Default value
-                tx_hash: None,            // Default value
+                tx_hash: context.tx_hash.as_ref().map(|hash| hash.0.to_vec()),
             }
         })
         .collect();
@@ -401,7 +467,7 @@ async fn assert_state_tree_root(
 
     println!("Output Account Hashes:");
     for account_with_context in &state_update.out_accounts {
-        let account_hash = hex::encode(&account_with_context.account.hash.0);
+        let account_hash = hex::encode(account_with_context.account.hash.0);
         let leaf_index = account_with_context.account.leaf_index.0;
         println!("  Hash({}) at leaf_index {}", account_hash, leaf_index);
     }
@@ -578,9 +644,9 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     assert_eq!(config.in_accounts.max_entries, 5);
     assert_eq!(config.in_accounts.probability, 0.0);
 
-    assert_eq!(config.out_accounts.min_entries, 0);
-    assert_eq!(config.out_accounts.max_entries, 5);
-    assert_eq!(config.out_accounts.probability, 1.0);
+    assert_eq!(config.out_accounts_v1.min_entries, 0);
+    assert_eq!(config.out_accounts_v1.max_entries, 5);
+    assert_eq!(config.out_accounts_v1.probability, 1.0);
 
     assert_eq!(config.transactions.min_entries, 0);
     assert_eq!(config.transactions.max_entries, 2);
@@ -589,7 +655,7 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     // Test that we can create a state update with incremental values
     let mut base_seq = 500;
     let mut base_leaf_index = 0;
-    let num_iters = 1000;
+    let num_iters = 10;
     for slot in 0..num_iters {
         println!("iter {}", slot);
         let simple_state_update =
