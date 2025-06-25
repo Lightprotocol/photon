@@ -1149,7 +1149,7 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     // Set up deterministic randomness following the light-protocol pattern
     let mut thread_rng = ThreadRng::default();
     let random_seed = thread_rng.next_u64();
-    let seed: u64 = random_seed;
+    let seed: u64 = 5331180609400104349; //random_seed;
     println!("\n\nconfig structure test seed {}\n\n", seed);
     let mut rng = StdRng::seed_from_u64(seed);
 
@@ -1192,7 +1192,7 @@ async fn test_output_accounts(#[values(DatabaseBackend::Sqlite)] db_backend: Dat
     let mut base_indexed_seq = 2; // Start at 2 since indexed tree is initialized with 0 and 1
     let mut v1_available_accounts_for_spending: Vec<Hash> = Vec::new();
     let mut v2_available_accounts_for_spending: Vec<Hash> = Vec::new();
-    let num_iters = 1;
+    let num_iters = 100;
 
     // Steps:
     // 1. Generate random state update
