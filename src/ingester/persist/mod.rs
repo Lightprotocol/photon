@@ -200,8 +200,47 @@ pub async fn persist_state_update(
     }
 
     debug!("Persisting account transactions...");
-    let account_transactions = account_transactions.into_iter().collect::<Vec<_>>();
-    for chunk in account_transactions.chunks(MAX_SQL_INSERTS) {
+    // Only create account transactions for transactions that were actually inserted (not duplicates)
+    // We need to check which transactions already exist in the database
+    let transactions_to_persist_signatures: std::collections::HashSet<Signature> = 
+        transactions_to_persist.iter().map(|tx| tx.signature).collect();
+    
+    // Get signatures of existing transactions to exclude them from account_transactions
+    let existing_signatures = if !transactions_to_persist_signatures.is_empty() {
+        let signature_bytes: Vec<Vec<u8>> = transactions_to_persist_signatures
+            .iter()
+            .map(|sig| Into::<[u8; 64]>::into(*sig).to_vec())
+            .collect();
+        
+        let existing_transactions = transactions::Entity::find()
+            .filter(transactions::Column::Signature.is_in(signature_bytes))
+            .all(txn)
+            .await?;
+        
+        existing_transactions.into_iter()
+            .map(|tx| Signature::from(<[u8; 64]>::try_from(tx.signature).unwrap()))
+            .collect::<std::collections::HashSet<_>>()
+    } else {
+        std::collections::HashSet::new()
+    };
+    
+    debug!("Found {} existing transactions out of {} total", existing_signatures.len(), transactions_to_persist_signatures.len());
+    
+    let account_transactions_vec = account_transactions.into_iter().collect::<Vec<_>>();
+    
+    // Only create AccountTransaction records for newly inserted transactions
+    let filtered_account_transactions: Vec<_> = account_transactions_vec
+        .into_iter()
+        .filter(|at| {
+            transactions_to_persist_signatures.contains(&at.signature) && 
+            !existing_signatures.contains(&at.signature)
+        })
+        .collect();
+    
+    debug!("Creating account transactions for {} transactions (filtered from {} total)", 
+           filtered_account_transactions.len(), account_transactions_vec.len());
+    
+    for chunk in filtered_account_transactions.chunks(MAX_SQL_INSERTS) {
         persist_account_transactions(txn, chunk).await?;
     }
 
@@ -561,6 +600,11 @@ async fn persist_transactions(
         // an error if we do not insert a record in an insert statement. However, in this case, it's
         // expected not to insert anything if the key already exists.
         let query = transactions::Entity::insert_many(transaction_models)
+            .on_conflict(
+                OnConflict::columns([transactions::Column::Signature])
+                    .do_nothing()
+                    .to_owned(),
+            )
             .build(txn.get_database_backend());
         debug!("Executing transaction insert query: {}", query.sql);
         let result = txn.execute(query).await?;
