@@ -176,8 +176,14 @@ pub async fn persist_state_update(
             .into_iter()
             .partition(|tx| tx.uses_compression);
 
+    debug!("Transaction breakdown: {} compression, {} non-compression", 
+           compression_transactions.len(), non_compression_transactions.len());
+
     let non_compression_transactions_to_keep =
         max(0, PAGE_LIMIT as i64 - compression_transactions.len() as i64);
+    debug!("Will keep {} non-compression transactions (PAGE_LIMIT={}, compression_count={})", 
+           non_compression_transactions_to_keep, PAGE_LIMIT, compression_transactions.len());
+    
     let transactions_to_persist = compression_transactions
         .into_iter()
         .chain(
@@ -187,6 +193,8 @@ pub async fn persist_state_update(
                 .take(non_compression_transactions_to_keep as usize),
         )
         .collect_vec();
+    
+    debug!("Total transactions to persist: {}", transactions_to_persist.len());
     for chunk in transactions_to_persist.chunks(MAX_SQL_INSERTS) {
         persist_transactions(txn, chunk).await?;
     }
@@ -532,6 +540,12 @@ async fn persist_transactions(
     txn: &DatabaseTransaction,
     transactions: &[Transaction],
 ) -> Result<(), IngesterError> {
+    debug!("Persisting {} transactions", transactions.len());
+    for tx in transactions {
+        debug!("Transaction signature: {:?}, slot: {}, uses_compression: {}", 
+               tx.signature, tx.slot, tx.uses_compression);
+    }
+    
     let transaction_models = transactions
         .iter()
         .map(|transaction| transactions::ActiveModel {
@@ -547,13 +561,10 @@ async fn persist_transactions(
         // an error if we do not insert a record in an insert statement. However, in this case, it's
         // expected not to insert anything if the key already exists.
         let query = transactions::Entity::insert_many(transaction_models)
-            .on_conflict(
-                OnConflict::columns([transactions::Column::Signature])
-                    .do_nothing()
-                    .to_owned(),
-            )
             .build(txn.get_database_backend());
-        txn.execute(query).await?;
+        debug!("Executing transaction insert query: {}", query.sql);
+        let result = txn.execute(query).await?;
+        debug!("Transaction insert result: rows_affected = {:?}", result.rows_affected());
     }
 
     let result = transactions::Entity::find()
