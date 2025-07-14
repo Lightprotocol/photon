@@ -227,6 +227,7 @@ pub async fn persist_state_update(
     debug!("Found {} existing transactions out of {} total", existing_signatures.len(), transactions_to_persist_signatures.len());
     
     let account_transactions_vec = account_transactions.into_iter().collect::<Vec<_>>();
+    let total_account_transactions = account_transactions_vec.len();
     
     // Only create AccountTransaction records for newly inserted transactions
     let filtered_account_transactions: Vec<_> = account_transactions_vec
@@ -238,7 +239,7 @@ pub async fn persist_state_update(
         .collect();
     
     debug!("Creating account transactions for {} transactions (filtered from {} total)", 
-           filtered_account_transactions.len(), account_transactions_vec.len());
+           filtered_account_transactions.len(), total_account_transactions);
     
     for chunk in filtered_account_transactions.chunks(MAX_SQL_INSERTS) {
         persist_account_transactions(txn, chunk).await?;
