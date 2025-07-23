@@ -17,6 +17,7 @@ use photon_indexer::ingester::fetchers::BlockStreamConfig;
 use photon_indexer::ingester::indexer::{
     fetch_last_indexed_slot_with_infinite_retry, index_block_stream,
 };
+use photon_indexer::ingester::signature_indexer::index_signatures_from_file;
 use photon_indexer::migration::{
     sea_orm::{DatabaseBackend, DatabaseConnection, SqlxPostgresConnector, SqlxSqliteConnector},
     Migrator, MigratorTrait,
@@ -98,6 +99,11 @@ struct Args {
     /// If provided, metrics will be sent to the specified statsd server.
     #[arg(long, default_value = None)]
     metrics_endpoint: Option<String>,
+
+    /// Path to a file containing transaction signatures to index (one per line)
+    /// When provided, the indexer will fetch and index these specific transactions instead of polling for new blocks
+    #[arg(long, default_value = None)]
+    signatures_file: Option<String>,
 }
 
 async fn start_api_server(
@@ -245,57 +251,75 @@ async fn main() {
             (None, None)
         }
         false => {
-            info!("Starting indexer...");
-            // For localnet we can safely use a large batch size to speed up indexing.
-            let max_concurrent_block_fetches = match args.max_concurrent_block_fetches {
-                Some(max_concurrent_block_fetches) => max_concurrent_block_fetches,
-                None => {
-                    if is_rpc_node_local {
-                        200
-                    } else {
-                        20
+            // Check if we should index from signatures file instead of normal block indexing
+            if let Some(signatures_file) = &args.signatures_file {
+                info!("Starting signature-based indexing from file: {}", signatures_file);
+                let signatures_file = signatures_file.clone();
+                let db_conn_clone = db_conn.clone();
+                let rpc_client_clone = rpc_client.clone();
+                let indexer_handle = tokio::spawn(async move {
+                    if let Err(e) = index_signatures_from_file(
+                        db_conn_clone,
+                        rpc_client_clone,
+                        &signatures_file,
+                    ).await {
+                        error!("Signature indexing failed: {}", e);
                     }
-                }
-            };
-            let last_indexed_slot = match args.start_slot {
-                Some(start_slot) => match start_slot.as_str() {
-                    "latest" => fetch_current_slot_with_infinite_retry(&rpc_client).await,
-                    _ => {
-                        fetch_block_parent_slot(&rpc_client, start_slot.parse::<u64>().unwrap())
-                            .await
+                });
+                (Some(indexer_handle), None)
+            } else {
+                info!("Starting indexer...");
+                // For localnet we can safely use a large batch size to speed up indexing.
+                let max_concurrent_block_fetches = match args.max_concurrent_block_fetches {
+                    Some(max_concurrent_block_fetches) => max_concurrent_block_fetches,
+                    None => {
+                        if is_rpc_node_local {
+                            200
+                        } else {
+                            20
+                        }
                     }
-                },
-                None => fetch_last_indexed_slot_with_infinite_retry(db_conn.as_ref())
-                    .await
-                    .unwrap_or(
-                        get_network_start_slot(&rpc_client)
-                            .await
-                            .try_into()
-                            .unwrap(),
-                    )
-                    .try_into()
-                    .unwrap(),
-            };
+                };
+                let last_indexed_slot = match args.start_slot {
+                    Some(start_slot) => match start_slot.as_str() {
+                        "latest" => fetch_current_slot_with_infinite_retry(&rpc_client).await,
+                        _ => {
+                            fetch_block_parent_slot(&rpc_client, start_slot.parse::<u64>().unwrap())
+                                .await
+                        }
+                    },
+                    None => fetch_last_indexed_slot_with_infinite_retry(db_conn.as_ref())
+                        .await
+                        .unwrap_or(
+                            get_network_start_slot(&rpc_client)
+                                .await
+                                .try_into()
+                                .unwrap(),
+                        )
+                        .try_into()
+                        .unwrap(),
+                };
 
-            let block_stream_config = BlockStreamConfig {
-                rpc_client: rpc_client.clone(),
-                max_concurrent_block_fetches,
-                last_indexed_slot,
-                geyser_url: args.grpc_url,
-            };
-
-            (
-                Some(continously_index_new_blocks(
-                    block_stream_config,
-                    db_conn.clone(),
-                    rpc_client.clone(),
+                let block_stream_config = BlockStreamConfig {
+                    rpc_client: rpc_client.clone(),
+                    max_concurrent_block_fetches,
                     last_indexed_slot,
-                )),
-                Some(continously_monitor_photon(
-                    db_conn.clone(),
-                    rpc_client.clone(),
-                )),
-            )
+                    geyser_url: args.grpc_url,
+                };
+
+                (
+                    Some(continously_index_new_blocks(
+                        block_stream_config,
+                        db_conn.clone(),
+                        rpc_client.clone(),
+                        last_indexed_slot,
+                    )),
+                    Some(continously_monitor_photon(
+                        db_conn.clone(),
+                        rpc_client.clone(),
+                    )),
+                )
+            }
         }
     };
 
