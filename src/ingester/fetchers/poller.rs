@@ -129,7 +129,7 @@ pub async fn fetch_block_with_infinite_retries(
                         metric! {
                             statsd_count!("rpc_skipped_block", 1);
                         }
-                        log::info!("Skipped block: {}", slot);
+                        log::info!("Skipped block: {} (code: {})", slot, code);
                         return None;
                     }
                 }
