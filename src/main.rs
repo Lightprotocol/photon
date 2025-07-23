@@ -56,6 +56,10 @@ struct Args {
     #[arg(short, long)]
     start_slot: Option<String>,
 
+    /// The end slot to stop indexing at. If not provided, indexing will continue indefinitely.
+    #[arg(short, long)]
+    end_slot: Option<u64>,
+
     /// Max database connections to use in database pool
     #[arg(long, default_value_t = 10)]
     max_db_conn: u32,
@@ -174,6 +178,7 @@ fn continously_index_new_blocks(
     db: Arc<DatabaseConnection>,
     rpc_client: Arc<RpcClient>,
     last_indexed_slot: u64,
+    end_slot: Option<u64>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let block_stream = block_stream_config.load_block_stream();
@@ -182,7 +187,7 @@ fn continously_index_new_blocks(
             db,
             rpc_client.clone(),
             last_indexed_slot,
-            None,
+            end_slot,
         )
         .await;
     })
@@ -290,6 +295,7 @@ async fn main() {
                     db_conn.clone(),
                     rpc_client.clone(),
                     last_indexed_slot,
+                    args.end_slot,
                 )),
                 Some(continously_monitor_photon(
                     db_conn.clone(),

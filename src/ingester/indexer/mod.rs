@@ -71,6 +71,47 @@ pub async fn index_block_stream(
 
     while let Some(blocks) = block_stream.next().await {
         let last_slot_in_block = blocks.last().unwrap().metadata.slot;
+        
+        // Check if we've reached the end slot before processing
+        if let Some(end_slot) = end_slot {
+            if last_slot_in_block > end_slot {
+                // Only process blocks up to the end slot
+                let filtered_blocks: Vec<_> = blocks
+                    .into_iter()
+                    .filter(|block| block.metadata.slot <= end_slot)
+                    .collect();
+                
+                if !filtered_blocks.is_empty() {
+                    let filtered_last_slot = filtered_blocks.last().unwrap().metadata.slot;
+                    index_block_batch_with_infinite_retries(db.as_ref(), filtered_blocks).await;
+                    
+                    for slot in (last_indexed_slot + 1)..(filtered_last_slot + 1) {
+                        let blocks_indexed = slot - last_indexed_slot_at_start;
+                        if blocks_indexed < number_of_blocks_to_backfill {
+                            if blocks_indexed % PRE_BACKFILL_FREQUENCY == 0 {
+                                info!(
+                                    "Backfilled {} / {} blocks",
+                                    blocks_indexed, number_of_blocks_to_backfill
+                                );
+                            }
+                        } else {
+                            if finished_backfill_slot.is_none() {
+                                info!("Finished backfilling historical blocks!");
+                                info!("Starting to index new blocks...");
+                                finished_backfill_slot = Some(slot);
+                            }
+                            if slot % POST_BACKFILL_FREQUENCY == 0 {
+                                info!("Indexed slot {}", slot);
+                            }
+                        }
+                        last_indexed_slot = slot;
+                    }
+                }
+                info!("Reached end slot {}. Stopping indexing.", end_slot);
+                break;
+            }
+        }
+        
         index_block_batch_with_infinite_retries(db.as_ref(), blocks).await;
 
         for slot in (last_indexed_slot + 1)..(last_slot_in_block + 1) {
@@ -93,6 +134,14 @@ pub async fn index_block_stream(
                 }
             }
             last_indexed_slot = slot;
+            
+            // Check if we've reached the end slot
+            if let Some(end_slot) = end_slot {
+                if slot >= end_slot {
+                    info!("Reached end slot {}. Stopping indexing.", end_slot);
+                    return;
+                }
+            }
         }
     }
 }
