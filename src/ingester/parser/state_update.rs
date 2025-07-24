@@ -162,6 +162,15 @@ impl StateUpdate {
                     });
                 }
 
+                // Update highest sequence numbers for each tree
+                if let Some(slot) = slot {
+                    for ((tree, _leaf_index), value) in &merged.indexed_merkle_tree_updates {
+                        if let Err(e) = TreeInfo::update_highest_seq(tree, value.seq, slot) {
+                            error!("Failed to update highest sequence for tree {}: {}", tree, e);
+                        }
+                    }
+                }
+
                 // Insert only if the seq is higher.
                 if let Some(existing) = merged.indexed_merkle_tree_updates.get_mut(&key) {
                     if value.seq > existing.seq {
@@ -191,15 +200,6 @@ impl StateUpdate {
         // If gaps were detected, return error
         if !detected_gaps.is_empty() {
             return Err(SequenceGapError::GapDetected(detected_gaps));
-        }
-
-        // Update highest sequence numbers for each tree
-        if let Some(slot) = slot {
-            for ((tree, _leaf_index), value) in &merged.indexed_merkle_tree_updates {
-                if let Err(e) = TreeInfo::update_highest_seq(tree, value.seq, slot) {
-                    error!("Failed to update highest sequence for tree {}: {}", tree, e);
-                }
-            }
         }
 
         Ok(merged)

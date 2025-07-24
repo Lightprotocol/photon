@@ -96,8 +96,8 @@ impl TreeInfo {
             if current_highest == 0 {
                 return None;
             }
-            // Only works for address v1 trees because + 2.
-            let expected_seq = current_highest + 2;
+
+            let expected_seq = current_highest + 1;
             if incoming_seq != expected_seq {
                 return Some((expected_seq, incoming_seq));
             }
