@@ -15,10 +15,10 @@ use sea_orm::QueryTrait;
 use sea_orm::Set;
 use sea_orm::TransactionTrait;
 
-use self::parser::state_update::{StateUpdate, SequenceGapError};
-use self::rewind_controller::{RewindController, determine_rewind_slot};
+use self::parser::state_update::{SequenceGapError, StateUpdate};
 use self::persist::persist_state_update;
 use self::persist::MAX_SQL_INSERTS;
+use self::rewind_controller::{determine_rewind_slot, RewindController};
 use self::typedefs::block_info::BlockInfo;
 use self::typedefs::block_info::BlockMetadata;
 use crate::dao::generated::blocks;
@@ -39,7 +39,7 @@ fn derive_block_state_update(
     for transaction in &block.transactions {
         state_updates.push(parse_transaction(transaction, block.metadata.slot)?);
     }
-    
+
     match StateUpdate::merge_updates_with_slot(state_updates, Some(block.metadata.slot)) {
         Ok(merged_update) => Ok(merged_update),
         Err(SequenceGapError::GapDetected(gaps)) => {
@@ -115,14 +115,14 @@ pub async fn index_block_batch(
     for block in block_batch {
         state_updates.push(derive_block_state_update(block, rewind_controller)?);
     }
-    
+
     if block_batch.is_empty() {
         return Ok(()); // Or return an appropriate error
     }
 
     let merged_state_update = match StateUpdate::merge_updates_with_slot(
-        state_updates, 
-        Some(block_batch.last().unwrap().metadata.slot)
+        state_updates,
+        Some(block_batch.last().unwrap().metadata.slot),
     ) {
         Ok(merged) => merged,
         Err(SequenceGapError::GapDetected(gaps)) => {
@@ -138,7 +138,7 @@ pub async fn index_block_batch(
             return Err(IngesterError::SequenceGapDetected(gaps));
         }
     };
-    
+
     persist::persist_state_update(&tx, merged_state_update).await?;
     metric! {
         statsd_count!("blocks_indexed", blocks_len as i64);

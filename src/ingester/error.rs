@@ -1,5 +1,5 @@
-use thiserror::Error;
 use crate::ingester::parser::state_update::SequenceGap;
+use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum IngesterError {

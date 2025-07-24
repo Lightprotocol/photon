@@ -228,10 +228,9 @@ fn test_single_sequence_no_gap() {
     let tree = pubkey!("BPF9L8vwCHcqW3xrLHgVrwCzxxH6VbSk1KDHhE1ZBFP8");
     let mut state_update = StateUpdate::new();
 
-    state_update.indexed_merkle_tree_updates.insert(
-        (tree, 0),
-        create_indexed_tree_update(tree, 0, 5),
-    );
+    state_update
+        .indexed_merkle_tree_updates
+        .insert((tree, 0), create_indexed_tree_update(tree, 0, 5));
 
     let result = StateUpdate::merge_updates_with_slot(vec![state_update], Some(100));
     assert!(result.is_ok());
@@ -296,15 +295,13 @@ fn test_starting_from_snapshot_no_gap() {
     let tree = pubkey!("BPF9L8vwCHcqW3xrLHgVrwCzxxH6VbSk1KDHhE1ZBFP3");
     let mut state_update = StateUpdate::new();
 
-    state_update.indexed_merkle_tree_updates.insert(
-        (tree, 0),
-        create_indexed_tree_update(tree, 0, 4256),
-    );
+    state_update
+        .indexed_merkle_tree_updates
+        .insert((tree, 0), create_indexed_tree_update(tree, 0, 4256));
 
-    state_update.indexed_merkle_tree_updates.insert(
-        (tree, 1),
-        create_indexed_tree_update(tree, 1, 4257),
-    );
+    state_update
+        .indexed_merkle_tree_updates
+        .insert((tree, 1), create_indexed_tree_update(tree, 1, 4257));
 
     let result = StateUpdate::merge_updates_with_slot(vec![state_update], Some(100));
     assert!(result.is_ok());

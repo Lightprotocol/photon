@@ -223,48 +223,36 @@ impl StateUpdate {
             }
 
             for nullification in &merged.leaf_nullifications {
-                let tree_type = TreeInfo::get_tree_type(&nullification.tree);
-                if tree_type == TreeType::StateV1 {
-                    all_sequences_by_tree
-                        .entry(nullification.tree)
-                        .or_insert_with(Vec::new)
-                        .push(SequenceSource::LeafNullification(nullification.seq));
-                }
+                all_sequences_by_tree
+                    .entry(nullification.tree)
+                    .or_insert_with(Vec::new)
+                    .push(SequenceSource::LeafNullification(nullification.seq));
             }
 
             for account in &merged.out_accounts {
                 let tree = account.account.tree.0;
-                let tree_type = TreeInfo::get_tree_type(&tree);
-                if tree_type != TreeType::AddressV1 && tree_type != TreeType::AddressV2 {
-                    all_sequences_by_tree
-                        .entry(tree)
-                        .or_insert_with(Vec::new)
-                        .push(SequenceSource::OutputAccount(account.account.leaf_index.0));
-                }
+                all_sequences_by_tree
+                    .entry(tree)
+                    .or_insert_with(Vec::new)
+                    .push(SequenceSource::OutputAccount(account.account.leaf_index.0));
             }
 
             for (tree_bytes, events) in &merged.batch_merkle_tree_events {
                 let tree = Pubkey::from(*tree_bytes);
-                let tree_type = TreeInfo::get_tree_type(&tree);
-                if tree_type != TreeType::AddressV1 && tree_type != TreeType::StateV1 {
-                    for (seq, _) in events {
-                        all_sequences_by_tree
-                            .entry(tree)
-                            .or_insert_with(Vec::new)
-                            .push(SequenceSource::BatchEvent(*seq));
-                    }
+                for (seq, _) in events {
+                    all_sequences_by_tree
+                        .entry(tree)
+                        .or_insert_with(Vec::new)
+                        .push(SequenceSource::BatchEvent(*seq));
                 }
             }
 
             for address_update in &merged.batch_new_addresses {
                 let tree = address_update.tree.0;
-                let tree_type = TreeInfo::get_tree_type(&tree);
-                if tree_type == TreeType::AddressV2 {
-                    all_sequences_by_tree
-                        .entry(tree)
-                        .or_insert_with(Vec::new)
-                        .push(SequenceSource::AddressQueue(address_update.queue_index));
-                }
+                all_sequences_by_tree
+                    .entry(tree)
+                    .or_insert_with(Vec::new)
+                    .push(SequenceSource::AddressQueue(address_update.queue_index));
             }
 
             for (tree, mut sequences) in all_sequences_by_tree {
@@ -272,7 +260,6 @@ impl StateUpdate {
                     continue;
                 }
 
-                // Sort all sequences for this tree regardless of source
                 sequences.sort_by_key(|s| match s {
                     SequenceSource::IndexedMerkleTree(seq) => *seq,
                     SequenceSource::LeafNullification(seq) => *seq,
