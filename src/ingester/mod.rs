@@ -116,6 +116,10 @@ pub async fn index_block_batch(
         state_updates.push(derive_block_state_update(block, rewind_controller)?);
     }
     
+    if block_batch.is_empty() {
+        return Ok(()); // Or return an appropriate error
+    }
+
     let merged_state_update = match StateUpdate::merge_updates_with_slot(
         state_updates, 
         Some(block_batch.last().unwrap().metadata.slot)
