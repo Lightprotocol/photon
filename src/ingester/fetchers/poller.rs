@@ -39,7 +39,7 @@ fn get_slot_stream(
                 while let Ok(command) = receiver.try_recv() {
                     match command {
                         RewindCommand::Rewind { to_slot, reason } => {
-                            log::warn!("Rewinding slot stream to {}: {}", to_slot, reason);
+                            log::error!("Rewinding slot stream to {}: {}", to_slot, reason);
                             next_slot_to_fetch = to_slot;
                         }
                     }

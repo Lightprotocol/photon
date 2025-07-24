@@ -197,7 +197,7 @@ impl StateUpdate {
         if let Some(slot) = slot {
             for ((tree, _leaf_index), value) in &merged.indexed_merkle_tree_updates {
                 if let Err(e) = TreeInfo::update_highest_seq(tree, value.seq, slot) {
-                    warn!("Failed to update highest sequence for tree {}: {}", tree, e);
+                    error!("Failed to update highest sequence for tree {}: {}", tree, e);
                 }
             }
         }

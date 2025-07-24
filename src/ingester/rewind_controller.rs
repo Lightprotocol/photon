@@ -23,7 +23,7 @@ impl RewindController {
             reason: reason.clone(),
         };
 
-        warn!("Requesting rewind to slot {}: {}", to_slot, reason);
+        error!("Requesting rewind to slot {}: {}", to_slot, reason);
 
         self.sender.send(command).map_err(|e| {
             error!("Failed to send rewind command: {}", e);
@@ -34,10 +34,10 @@ impl RewindController {
 
 pub fn determine_rewind_slot(gaps: &[crate::ingester::parser::state_update::SequenceGap]) -> u64 {
     use crate::ingester::parser::tree_info::TreeInfo;
-    
+
     // Find the earliest slot where we need to rewind to get the missing sequence
     let mut earliest_slot = u64::MAX;
-    
+
     for gap in gaps {
         // Try to find the exact slot for the last known good sequence
         let target_seq = gap.expected_seq.saturating_sub(1);
@@ -50,7 +50,7 @@ pub fn determine_rewind_slot(gaps: &[crate::ingester::parser::state_update::Sequ
             earliest_slot = earliest_slot.min(gap.expected_seq.saturating_sub(10));
         }
     }
-    
+
     // Ensure we don't rewind to slot 0 unless explicitly needed
     if earliest_slot == u64::MAX {
         // No valid slots found, use conservative fallback

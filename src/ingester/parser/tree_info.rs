@@ -43,10 +43,17 @@ impl TreeInfo {
 
     pub fn update_highest_seq(pubkey: &Pubkey, new_seq: u64, slot: u64) -> Result<u64, String> {
         let tree_pubkey_str = pubkey.to_string();
+
         if let Some(tree_info) = Self::get(&tree_pubkey_str) {
             let current = tree_info
                 .highest_seq
                 .load(std::sync::atomic::Ordering::Acquire);
+            log::info!(
+                "Updating highest sequence for tree {} from {} to {}",
+                tree_pubkey_str,
+                current,
+                new_seq
+            );
             if new_seq > current {
                 tree_info
                     .highest_seq

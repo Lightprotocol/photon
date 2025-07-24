@@ -68,7 +68,7 @@ pub fn create_state_update_v1(
             Some(info) => info.clone(),
             None => {
                 if super::SKIP_UNKNOWN_TREES {
-                    log::warn!("Skipping unknown tree: {}", tree.to_string());
+                    log::error!("Skipping unknown tree: {}", tree.to_string());
                     continue;
                 } else {
                     return Err(IngesterError::ParserError(format!(
