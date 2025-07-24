@@ -60,7 +60,7 @@ pub fn read_signatures_from_file(file_path: &str) -> Result<Vec<Signature>, Inge
 pub async fn fetch_transaction_from_signature(
     rpc_client: &RpcClient,
     signature: &Signature,
-) -> Result<TransactionInfo, IngesterError> {
+) -> Result<(TransactionInfo, u64), IngesterError> {
     let encoded_transaction = rpc_client
         .get_transaction_with_config(signature, RPC_CONFIG)
         .await
@@ -71,7 +71,9 @@ pub async fn fetch_transaction_from_signature(
             ))
         })?;
     
-    TransactionInfo::try_from(encoded_transaction)
+    let slot = encoded_transaction.slot;
+    let transaction_info = TransactionInfo::try_from(encoded_transaction)?;
+    Ok((transaction_info, slot))
 }
 
 pub async fn index_signatures_from_file(
@@ -109,10 +111,10 @@ async fn process_single_signature(
     rpc_client: Arc<RpcClient>,
     signature: &Signature,
 ) -> Result<(), IngesterError> {
-    let transaction_info = fetch_transaction_from_signature(&rpc_client, signature).await?;
+    let (transaction_info, slot) = fetch_transaction_from_signature(&rpc_client, signature).await?;
     
-    // Use slot 0 since we don't have block context
-    let state_update = parse_transaction(&transaction_info, 0)?;
+    // Use the actual slot from the transaction context
+    let state_update = parse_transaction(&transaction_info, slot)?;
     
     let tx = db.as_ref().begin().await?;
     persist_state_update(&tx, state_update).await?;
