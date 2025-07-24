@@ -2,6 +2,7 @@ use lazy_static::lazy_static;
 use light_compressed_account::TreeType;
 use solana_pubkey::{pubkey, Pubkey};
 use std::collections::HashMap;
+use std::sync::{atomic::AtomicU64, Arc};
 
 #[derive(Debug, Clone)]
 pub struct TreeInfo {
@@ -9,6 +10,8 @@ pub struct TreeInfo {
     pub queue: Pubkey,
     pub height: u32,
     pub tree_type: TreeType,
+    pub highest_seq: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub last_slot: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl TreeInfo {
@@ -30,6 +33,76 @@ impl TreeInfo {
     pub fn get_tree_type_from_bytes(tree_bytes: &[u8; 32]) -> TreeType {
         let pubkey = Pubkey::from(*tree_bytes);
         Self::get_tree_type(&pubkey)
+    }
+
+    pub fn get_highest_seq(pubkey: &Pubkey) -> Option<u64> {
+        let tree_pubkey_str = pubkey.to_string();
+        Self::get(&tree_pubkey_str)
+            .map(|info| info.highest_seq.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    pub fn update_highest_seq(pubkey: &Pubkey, new_seq: u64, slot: u64) -> Result<u64, String> {
+        let tree_pubkey_str = pubkey.to_string();
+
+        if let Some(tree_info) = Self::get(&tree_pubkey_str) {
+            let current = tree_info
+                .highest_seq
+                .load(std::sync::atomic::Ordering::Acquire);
+            log::info!(
+                "Updating highest sequence for tree {} from {} to {}",
+                tree_pubkey_str,
+                current,
+                new_seq
+            );
+            if new_seq > current {
+                tree_info
+                    .highest_seq
+                    .store(new_seq, std::sync::atomic::Ordering::Release);
+                tree_info
+                    .last_slot
+                    .store(slot, std::sync::atomic::Ordering::Release);
+                Ok(new_seq)
+            } else {
+                Ok(current)
+            }
+        } else {
+            Err(format!("Tree {} not found in mapping", pubkey))
+        }
+    }
+
+    pub fn get_last_slot_for_seq(pubkey: &Pubkey, target_seq: u64) -> Option<u64> {
+        let tree_pubkey_str = pubkey.to_string();
+        if let Some(tree_info) = Self::get(&tree_pubkey_str) {
+            let current_seq = tree_info
+                .highest_seq
+                .load(std::sync::atomic::Ordering::Acquire);
+            if target_seq <= current_seq {
+                // Return the slot where this sequence was last processed
+                Some(
+                    tree_info
+                        .last_slot
+                        .load(std::sync::atomic::Ordering::Acquire),
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn check_sequence_gap(pubkey: &Pubkey, incoming_seq: u64) -> Option<(u64, u64)> {
+        if let Some(current_highest) = Self::get_highest_seq(pubkey) {
+            // We init with 0, we cannot crash on 0
+            if current_highest == 0 {
+                return None;
+            }
+
+            let expected_seq = current_highest + 1;
+            if incoming_seq != expected_seq {
+                return Some((expected_seq, incoming_seq));
+            }
+        }
+        None
     }
 }
 
@@ -198,6 +271,8 @@ lazy_static! {
                     queue: *legacy_queue,
                     height: 26,
                     tree_type: TreeType::StateV1,
+                    highest_seq: Arc::new(AtomicU64::new(0)),
+                    last_slot: Arc::new(AtomicU64::new(0)),
                 },
             );
 
@@ -208,6 +283,8 @@ lazy_static! {
                     queue: *legacy_queue,
                     height: 26,
                     tree_type: TreeType::StateV1,
+                    highest_seq: Arc::new(AtomicU64::new(0)),
+                    last_slot: Arc::new(AtomicU64::new(0)),
                 },
             );
         }
@@ -220,6 +297,8 @@ lazy_static! {
                     queue: *legacy_queue,
                     height: 26,
                     tree_type: TreeType::AddressV1,
+                    highest_seq: Arc::new(AtomicU64::new(0)),
+                    last_slot: Arc::new(AtomicU64::new(0)),
                 },
             );
 
@@ -230,6 +309,8 @@ lazy_static! {
                     queue: *legacy_queue,
                     height: 26,
                     tree_type: TreeType::AddressV1,
+                    highest_seq: Arc::new(AtomicU64::new(0)),
+                    last_slot: Arc::new(AtomicU64::new(0)),
                 },
             );
         }
@@ -274,6 +355,8 @@ lazy_static! {
                     queue: *queue,
                     height: 32,
                     tree_type: TreeType::StateV2,
+                    highest_seq: Arc::new(AtomicU64::new(0)),
+                    last_slot: Arc::new(AtomicU64::new(0)),
                 },
             );
 
@@ -284,6 +367,8 @@ lazy_static! {
                     queue: *queue,
                     height: 32,
                     tree_type: TreeType::StateV2,
+                    highest_seq: Arc::new(AtomicU64::new(0)),
+                    last_slot: Arc::new(AtomicU64::new(0)),
                 },
             );
         }
@@ -296,6 +381,8 @@ lazy_static! {
                     queue: *tree_queue,
                     height: 40,
                     tree_type: TreeType::AddressV2,
+                    highest_seq: Arc::new(AtomicU64::new(0)),
+                    last_slot: Arc::new(AtomicU64::new(0)),
                 },
             );
         }

@@ -127,7 +127,7 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
         }
     }
 
-    let mut state_update = StateUpdate::merge_updates(state_updates.clone());
+    let mut state_update = StateUpdate::merge_updates(state_updates.clone())?;
     if !is_voting_transaction(tx) || is_compression_transaction {
         state_update.transactions.insert(Transaction {
             signature: tx.signature,

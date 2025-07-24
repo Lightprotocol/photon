@@ -465,7 +465,7 @@ pub async fn index_multiple_transactions(
         let tx_state_update = parse_transaction(&transaction_info, 0).unwrap();
         state_updates.push(tx_state_update);
     }
-    let state_update = StateUpdate::merge_updates(state_updates);
+    let state_update = StateUpdate::merge_updates(state_updates).unwrap();
     persist_state_update_using_connection(db_conn.as_ref(), state_update)
         .await
         .unwrap();
@@ -555,6 +555,7 @@ pub async fn index(
                     },
                     ..Default::default()
                 },
+                None,
             )
             .await
             .unwrap();
