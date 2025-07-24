@@ -27,6 +27,7 @@ pub mod fetchers;
 pub mod indexer;
 pub mod parser;
 pub mod persist;
+pub mod signature_indexer;
 pub mod typedefs;
 
 fn derive_block_state_update(block: &BlockInfo) -> Result<StateUpdate, IngesterError> {
