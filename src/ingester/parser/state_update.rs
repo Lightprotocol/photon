@@ -12,7 +12,7 @@ use light_compressed_account::TreeType;
 use solana_pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use std::collections::{HashMap, HashSet};
-use tracing::{error, warn};
+use tracing::error;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

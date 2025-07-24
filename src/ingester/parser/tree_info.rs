@@ -90,14 +90,14 @@ impl TreeInfo {
             None
         }
     }
-
     pub fn check_sequence_gap(pubkey: &Pubkey, incoming_seq: u64) -> Option<(u64, u64)> {
         if let Some(current_highest) = Self::get_highest_seq(pubkey) {
             // We init with 0, we cannot crash on 0
             if current_highest == 0 {
                 return None;
             }
-            let expected_seq = current_highest + 1;
+            // Only works for address v1 trees because + 2.
+            let expected_seq = current_highest + 2;
             if incoming_seq != expected_seq {
                 return Some((expected_seq, incoming_seq));
             }

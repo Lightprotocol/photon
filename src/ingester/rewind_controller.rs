@@ -1,5 +1,5 @@
 use tokio::sync::mpsc;
-use tracing::{error, warn};
+use tracing::error;
 
 #[derive(Debug, Clone)]
 pub enum RewindCommand {
