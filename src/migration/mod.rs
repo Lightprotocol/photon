@@ -1,4 +1,4 @@
-use migrations::{custom::get_custom_migrations, standard::get_standard_migrations};
+use migrations::standard::get_standard_migrations;
 
 pub use sea_orm_migration::prelude::*;
 
@@ -21,7 +21,7 @@ impl MigratorTrait for MigractorWithCustomMigrations {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         get_standard_migrations()
             .into_iter()
-            .chain(get_custom_migrations())
+            // .chain(get_custom_migrations())
             .collect()
     }
 }

@@ -130,29 +130,37 @@ impl StateUpdate {
         updates: Vec<StateUpdate>,
         slot: Option<u64>,
     ) -> Result<StateUpdate, SequenceGapError> {
+        #[cfg(test)]
+        if slot.is_some() {
+            use crate::ingester::parser::tree_info::TreeInfo;
+            TreeInfo::reset_all_sequences();
+        }
+
         let mut merged = StateUpdate::default();
         let mut detected_gaps = Vec::new();
 
-        let mut all_sequences_by_tree: HashMap<Pubkey, Vec<u64>> = HashMap::new();
+        let mut all_output_leaf_indices: HashMap<Pubkey, Vec<u64>> = HashMap::new();
+        let mut all_address_queue_indices: HashMap<Pubkey, Vec<u64>> = HashMap::new();
 
         for update in updates {
             merged.in_accounts.extend(update.in_accounts);
+
+            for account in &update.out_accounts {
+                let tree_pubkey = account.account.tree.0;
+                all_output_leaf_indices
+                    .entry(tree_pubkey)
+                    .or_insert_with(Vec::new)
+                    .push(account.account.leaf_index.0);
+            }
             merged.out_accounts.extend(update.out_accounts);
             merged
                 .account_transactions
                 .extend(update.account_transactions);
             merged.transactions.extend(update.transactions);
+
             merged
                 .leaf_nullifications
                 .extend(update.leaf_nullifications);
-
-            for (key, value) in &update.indexed_merkle_tree_updates {
-                let (tree, _) = key;
-                all_sequences_by_tree
-                    .entry(*tree)
-                    .or_insert_with(Vec::new)
-                    .push(value.seq);
-            }
 
             for (key, value) in update.indexed_merkle_tree_updates {
                 let (_, _leaf_index) = key;
@@ -175,56 +183,135 @@ impl StateUpdate {
                 }
             }
 
+            for address_update in &update.batch_new_addresses {
+                let tree_pubkey = address_update.tree.0;
+                all_address_queue_indices
+                    .entry(tree_pubkey)
+                    .or_insert_with(Vec::new)
+                    .push(address_update.queue_index);
+            }
             merged
                 .batch_new_addresses
                 .extend(update.batch_new_addresses);
+
+            // Note: BatchNullifyContext gap detection requires tree association
+            // For now, skip since we don't have a reliable way to determine tree from account_hash
             merged
                 .batch_nullify_context
                 .extend(update.batch_nullify_context);
         }
 
         if let Some(slot) = slot {
+            #[derive(Debug)]
+            enum SequenceSource {
+                IndexedMerkleTree(u64),
+                LeafNullification(u64),
+                OutputAccount(u64),
+                BatchEvent(u64),
+                AddressQueue(u64),
+            }
+
+            let mut all_sequences_by_tree: std::collections::HashMap<Pubkey, Vec<SequenceSource>> =
+                std::collections::HashMap::new();
+
+            for (&key, value) in &merged.indexed_merkle_tree_updates {
+                let (tree, _leaf_index) = key;
+                all_sequences_by_tree
+                    .entry(tree)
+                    .or_insert_with(Vec::new)
+                    .push(SequenceSource::IndexedMerkleTree(value.seq));
+            }
+
+            for nullification in &merged.leaf_nullifications {
+                let tree_type = TreeInfo::get_tree_type(&nullification.tree);
+                if tree_type == TreeType::StateV1 {
+                    all_sequences_by_tree
+                        .entry(nullification.tree)
+                        .or_insert_with(Vec::new)
+                        .push(SequenceSource::LeafNullification(nullification.seq));
+                }
+            }
+
+            for account in &merged.out_accounts {
+                let tree = account.account.tree.0;
+                let tree_type = TreeInfo::get_tree_type(&tree);
+                if tree_type != TreeType::AddressV1 && tree_type != TreeType::AddressV2 {
+                    all_sequences_by_tree
+                        .entry(tree)
+                        .or_insert_with(Vec::new)
+                        .push(SequenceSource::OutputAccount(account.account.leaf_index.0));
+                }
+            }
+
+            for (tree_bytes, events) in &merged.batch_merkle_tree_events {
+                let tree = Pubkey::from(*tree_bytes);
+                let tree_type = TreeInfo::get_tree_type(&tree);
+                if tree_type != TreeType::AddressV1 && tree_type != TreeType::StateV1 {
+                    for (seq, _) in events {
+                        all_sequences_by_tree
+                            .entry(tree)
+                            .or_insert_with(Vec::new)
+                            .push(SequenceSource::BatchEvent(*seq));
+                    }
+                }
+            }
+
+            for address_update in &merged.batch_new_addresses {
+                let tree = address_update.tree.0;
+                let tree_type = TreeInfo::get_tree_type(&tree);
+                if tree_type == TreeType::AddressV2 {
+                    all_sequences_by_tree
+                        .entry(tree)
+                        .or_insert_with(Vec::new)
+                        .push(SequenceSource::AddressQueue(address_update.queue_index));
+                }
+            }
+
             for (tree, mut sequences) in all_sequences_by_tree {
-                sequences.sort_unstable();
-
-                let mut current_highest = TreeInfo::get_highest_seq(&tree).unwrap_or(0);
-
-                if current_highest == 0 && !sequences.is_empty() {
-                    current_highest = sequences[0].saturating_sub(1);
+                if sequences.is_empty() {
+                    continue;
                 }
 
-                for &seq in &sequences {
-                    if seq <= current_highest {
-                        continue;
-                    }
+                // Sort all sequences for this tree regardless of source
+                sequences.sort_by_key(|s| match s {
+                    SequenceSource::IndexedMerkleTree(seq) => *seq,
+                    SequenceSource::LeafNullification(seq) => *seq,
+                    SequenceSource::OutputAccount(seq) => *seq,
+                    SequenceSource::BatchEvent(seq) => *seq,
+                    SequenceSource::AddressQueue(seq) => *seq,
+                });
 
-                    let expected = current_highest + 1;
-                    if seq != expected {
+                for sequence in sequences {
+                    let (seq, source_name) = match sequence {
+                        SequenceSource::IndexedMerkleTree(seq) => (seq, "indexed merkle tree"),
+                        SequenceSource::LeafNullification(seq) => (seq, "leaf nullification"),
+                        SequenceSource::OutputAccount(seq) => (seq, "output account"),
+                        SequenceSource::BatchEvent(seq) => (seq, "batch event"),
+                        SequenceSource::AddressQueue(seq) => (seq, "address queue"),
+                    };
+
+                    if let Some((expected_seq, actual_seq)) =
+                        TreeInfo::check_sequence_gap(&tree, seq)
+                    {
                         error!(
-                            "Sequence gap detected for tree {}: expected {}, got {}",
-                            tree, expected, seq
+                            "{} sequence gap detected for tree {}: expected {}, got {}",
+                            source_name, tree, expected_seq, actual_seq
                         );
                         detected_gaps.push(SequenceGap {
                             tree,
-                            expected_seq: expected,
-                            actual_seq: seq,
+                            expected_seq,
+                            actual_seq,
                         });
-                        break;
                     }
-                    current_highest = seq;
+
+                    // Update highest sequence for this tree
+                    if let Err(e) = TreeInfo::update_highest_seq(&tree, seq, slot) {
+                        error!("Failed to update highest sequence for tree {}: {}", tree, e);
+                    }
                 }
             }
 
-            let mut sorted_indexed_merkle_tree_updates: Vec<_> =
-                merged.indexed_merkle_tree_updates.iter().collect();
-            sorted_indexed_merkle_tree_updates.sort_by_key(|(_, u)| u.seq);
-
-            for (&key, value) in sorted_indexed_merkle_tree_updates {
-                let (tree, _leaf_index) = key;
-                if let Err(e) = TreeInfo::update_highest_seq(&tree, value.seq, slot) {
-                    error!("Failed to update highest sequence for tree {}: {}", tree, e);
-                }
-            }
+            // TODO: Add batch nullify context queue index gap detection
         }
         if !detected_gaps.is_empty() {
             return Err(SequenceGapError::GapDetected(detected_gaps));

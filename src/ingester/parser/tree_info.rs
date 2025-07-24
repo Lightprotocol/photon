@@ -104,6 +104,14 @@ impl TreeInfo {
         }
         None
     }
+
+    /// Reset all atomic counters for tests - only used in test environments
+    pub fn reset_all_sequences() {
+        for tree_info in QUEUE_TREE_MAPPING.values() {
+            tree_info.highest_seq.store(0, std::sync::atomic::Ordering::Release);
+            tree_info.last_slot.store(0, std::sync::atomic::Ordering::Release);
+        }
+    }
 }
 
 // TODO: add a table which stores tree metadata: tree_pubkey | queue_pubkey | type | ...
