@@ -66,16 +66,17 @@ pub async fn index_block_stream(
         "Backfilling historical blocks. Current number of blocks to backfill: {}",
         number_of_blocks_to_backfill
     );
-    let mut last_indexed_slot = last_indexed_slot_at_start;
+    // let mut last_indexed_slot = last_indexed_slot_at_start;
 
     let mut finished_backfill_slot = None;
 
     while let Some(blocks) = block_stream.next().await {
+        let first_slot_in_block = blocks.first().unwrap().metadata.slot;
         let last_slot_in_block = blocks.last().unwrap().metadata.slot;
         index_block_batch_with_infinite_retries(db.as_ref(), blocks, rewind_controller).await;
 
-        for slot in (last_indexed_slot + 1)..(last_slot_in_block + 1) {
-            let blocks_indexed = slot - last_indexed_slot_at_start;
+        for slot in first_slot_in_block..(last_slot_in_block + 1) {
+            let blocks_indexed = slot.saturating_sub(last_indexed_slot_at_start);
             if blocks_indexed < number_of_blocks_to_backfill {
                 if blocks_indexed % PRE_BACKFILL_FREQUENCY == 0 {
                     info!(
@@ -93,7 +94,7 @@ pub async fn index_block_stream(
                     info!("Indexed slot {}", slot);
                 }
             }
-            last_indexed_slot = slot;
+            // last_indexed_slot = slot;
         }
     }
 }
