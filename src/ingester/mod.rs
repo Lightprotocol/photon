@@ -15,7 +15,8 @@ use sea_orm::QueryTrait;
 use sea_orm::Set;
 use sea_orm::TransactionTrait;
 
-use self::parser::state_update::StateUpdate;
+use self::parser::state_update::{StateUpdate, SequenceGapError};
+use self::rewind_controller::{RewindController, determine_rewind_slot};
 use self::persist::persist_state_update;
 use self::persist::MAX_SQL_INSERTS;
 use self::typedefs::block_info::BlockInfo;
@@ -27,20 +28,43 @@ pub mod fetchers;
 pub mod indexer;
 pub mod parser;
 pub mod persist;
+pub mod rewind_controller;
 pub mod typedefs;
 
-fn derive_block_state_update(block: &BlockInfo) -> Result<StateUpdate, IngesterError> {
+fn derive_block_state_update(
+    block: &BlockInfo,
+    rewind_controller: Option<&RewindController>,
+) -> Result<StateUpdate, IngesterError> {
     let mut state_updates: Vec<StateUpdate> = Vec::new();
     for transaction in &block.transactions {
         state_updates.push(parse_transaction(transaction, block.metadata.slot)?);
     }
-    Ok(StateUpdate::merge_updates(state_updates))
+    
+    match StateUpdate::merge_updates_with_slot(state_updates, Some(block.metadata.slot)) {
+        Ok(merged_update) => Ok(merged_update),
+        Err(SequenceGapError::GapDetected(gaps)) => {
+            if let Some(controller) = rewind_controller {
+                let rewind_slot = determine_rewind_slot(&gaps);
+                let reason = format!(
+                    "Sequence gaps detected in block {}: {} gaps found",
+                    block.metadata.slot,
+                    gaps.len()
+                );
+                controller.request_rewind(rewind_slot, reason)?;
+            }
+            Err(IngesterError::SequenceGapDetected(gaps))
+        }
+    }
 }
 
-pub async fn index_block(db: &DatabaseConnection, block: &BlockInfo) -> Result<(), IngesterError> {
+pub async fn index_block(
+    db: &DatabaseConnection,
+    block: &BlockInfo,
+    rewind_controller: Option<&RewindController>,
+) -> Result<(), IngesterError> {
     let txn = db.begin().await?;
     index_block_metadatas(&txn, vec![&block.metadata]).await?;
-    persist_state_update(&txn, derive_block_state_update(block)?).await?;
+    persist_state_update(&txn, derive_block_state_update(block, rewind_controller)?).await?;
     txn.commit().await?;
     Ok(())
 }
@@ -81,6 +105,7 @@ async fn index_block_metadatas(
 pub async fn index_block_batch(
     db: &DatabaseConnection,
     block_batch: &Vec<BlockInfo>,
+    rewind_controller: Option<&RewindController>,
 ) -> Result<(), IngesterError> {
     let blocks_len = block_batch.len();
     let tx = db.begin().await?;
@@ -88,9 +113,29 @@ pub async fn index_block_batch(
     index_block_metadatas(&tx, block_metadatas).await?;
     let mut state_updates = Vec::new();
     for block in block_batch {
-        state_updates.push(derive_block_state_update(block)?);
+        state_updates.push(derive_block_state_update(block, rewind_controller)?);
     }
-    persist::persist_state_update(&tx, StateUpdate::merge_updates(state_updates)).await?;
+    
+    let merged_state_update = match StateUpdate::merge_updates_with_slot(
+        state_updates, 
+        Some(block_batch.last().unwrap().metadata.slot)
+    ) {
+        Ok(merged) => merged,
+        Err(SequenceGapError::GapDetected(gaps)) => {
+            if let Some(controller) = rewind_controller {
+                let rewind_slot = determine_rewind_slot(&gaps);
+                let reason = format!(
+                    "Sequence gaps detected in batch ending at slot {}: {} gaps found",
+                    block_batch.last().unwrap().metadata.slot,
+                    gaps.len()
+                );
+                controller.request_rewind(rewind_slot, reason)?;
+            }
+            return Err(IngesterError::SequenceGapDetected(gaps));
+        }
+    };
+    
+    persist::persist_state_update(&tx, merged_state_update).await?;
     metric! {
         statsd_count!("blocks_indexed", blocks_len as i64);
     }
@@ -101,10 +146,16 @@ pub async fn index_block_batch(
 pub async fn index_block_batch_with_infinite_retries(
     db: &DatabaseConnection,
     block_batch: Vec<BlockInfo>,
+    rewind_controller: Option<&RewindController>,
 ) {
     loop {
-        match index_block_batch(db, &block_batch).await {
+        match index_block_batch(db, &block_batch, rewind_controller).await {
             Ok(()) => return,
+            Err(IngesterError::SequenceGapDetected(_)) => {
+                // For sequence gaps, we don't retry - we let the rewind mechanism handle it
+                log::error!("Sequence gap detected in batch, stopping processing to allow rewind");
+                return;
+            }
             Err(e) => {
                 let start_block = block_batch.first().unwrap().metadata.slot;
                 let end_block = block_batch.last().unwrap().metadata.slot;

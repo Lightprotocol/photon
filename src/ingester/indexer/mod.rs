@@ -52,6 +52,7 @@ pub async fn index_block_stream(
     rpc_client: Arc<RpcClient>,
     last_indexed_slot_at_start: u64,
     end_slot: Option<u64>,
+    rewind_controller: Option<&crate::ingester::rewind_controller::RewindController>,
 ) {
     pin_mut!(block_stream);
     let current_slot =
@@ -71,7 +72,7 @@ pub async fn index_block_stream(
 
     while let Some(blocks) = block_stream.next().await {
         let last_slot_in_block = blocks.last().unwrap().metadata.slot;
-        index_block_batch_with_infinite_retries(db.as_ref(), blocks).await;
+        index_block_batch_with_infinite_retries(db.as_ref(), blocks, rewind_controller).await;
 
         for slot in (last_indexed_slot + 1)..(last_slot_in_block + 1) {
             let blocks_indexed = slot - last_indexed_slot_at_start;

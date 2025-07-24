@@ -148,6 +148,6 @@ pub fn create_state_update_v2(
         state_updates.push(state_update_event);
     }
 
-    let merged = StateUpdate::merge_updates(state_updates);
+    let merged = StateUpdate::merge_updates(state_updates)?;
     Ok(merged)
 }
