@@ -133,6 +133,8 @@ impl StateUpdate {
         let mut merged = StateUpdate::default();
         let mut detected_gaps = Vec::new();
 
+        let mut all_sequences_by_tree: HashMap<Pubkey, Vec<u64>> = HashMap::new();
+
         for update in updates {
             merged.in_accounts.extend(update.in_accounts);
             merged.out_accounts.extend(update.out_accounts);
@@ -143,6 +145,14 @@ impl StateUpdate {
             merged
                 .leaf_nullifications
                 .extend(update.leaf_nullifications);
+
+            for (key, value) in &update.indexed_merkle_tree_updates {
+                let (tree, _) = key;
+                all_sequences_by_tree
+                    .entry(*tree)
+                    .or_insert_with(Vec::new)
+                    .push(value.seq);
+            }
 
             for (key, value) in update.indexed_merkle_tree_updates {
                 let (_, _leaf_index) = key;
@@ -173,35 +183,49 @@ impl StateUpdate {
                 .extend(update.batch_nullify_context);
         }
 
-        let mut sorted_indexed_merkle_tree_updates: Vec<_> =
-            merged.indexed_merkle_tree_updates.iter().collect();
-        sorted_indexed_merkle_tree_updates.sort_by_key(|(_, u)| u.seq);
         if let Some(slot) = slot {
-            for (&key, value) in sorted_indexed_merkle_tree_updates {
-                let (tree, _leaf_index) = key;
+            for (tree, mut sequences) in all_sequences_by_tree {
+                sequences.sort_unstable();
 
-                // Check for sequence gaps before merging
-                if let Some((expected_seq, actual_seq)) =
-                    TreeInfo::check_sequence_gap(&tree, value.seq)
-                {
-                    error!(
-                        "Sequence gap detected for tree {}: expected {}, got {}",
-                        tree, expected_seq, actual_seq
-                    );
-                    detected_gaps.push(SequenceGap {
-                        tree,
-                        expected_seq,
-                        actual_seq,
-                    });
+                let mut current_highest = TreeInfo::get_highest_seq(&tree).unwrap_or(0);
+
+                if current_highest == 0 && !sequences.is_empty() {
+                    current_highest = sequences[0].saturating_sub(1);
                 }
 
-                // Update highest sequence numbers for each tree
+                for &seq in &sequences {
+                    if seq <= current_highest {
+                        continue;
+                    }
+
+                    let expected = current_highest + 1;
+                    if seq != expected {
+                        error!(
+                            "Sequence gap detected for tree {}: expected {}, got {}",
+                            tree, expected, seq
+                        );
+                        detected_gaps.push(SequenceGap {
+                            tree,
+                            expected_seq: expected,
+                            actual_seq: seq,
+                        });
+                        break;
+                    }
+                    current_highest = seq;
+                }
+            }
+
+            let mut sorted_indexed_merkle_tree_updates: Vec<_> =
+                merged.indexed_merkle_tree_updates.iter().collect();
+            sorted_indexed_merkle_tree_updates.sort_by_key(|(_, u)| u.seq);
+
+            for (&key, value) in sorted_indexed_merkle_tree_updates {
+                let (tree, _leaf_index) = key;
                 if let Err(e) = TreeInfo::update_highest_seq(&tree, value.seq, slot) {
                     error!("Failed to update highest sequence for tree {}: {}", tree, e);
                 }
             }
         }
-        // If gaps were detected, return error
         if !detected_gaps.is_empty() {
             return Err(SequenceGapError::GapDetected(detected_gaps));
         }
