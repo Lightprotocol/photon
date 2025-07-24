@@ -173,39 +173,34 @@ impl StateUpdate {
                 .extend(update.batch_nullify_context);
         }
 
-        //
-        //
-
         let mut sorted_indexed_merkle_tree_updates: Vec<_> =
             merged.indexed_merkle_tree_updates.iter().collect();
         sorted_indexed_merkle_tree_updates.sort_by_key(|(_, u)| u.seq);
-        for (&key, value) in sorted_indexed_merkle_tree_updates {
-            let (tree, _leaf_index) = key;
+        if let Some(slot) = slot {
+            for (&key, value) in sorted_indexed_merkle_tree_updates {
+                let (tree, _leaf_index) = key;
 
-            // Check for sequence gaps before merging
-            if let Some((expected_seq, actual_seq)) = TreeInfo::check_sequence_gap(&tree, value.seq)
-            {
-                error!(
-                    "Sequence gap detected for tree {}: expected {}, got {}",
-                    tree, expected_seq, actual_seq
-                );
-                detected_gaps.push(SequenceGap {
-                    tree,
-                    expected_seq,
-                    actual_seq,
-                });
-            }
+                // Check for sequence gaps before merging
+                if let Some((expected_seq, actual_seq)) =
+                    TreeInfo::check_sequence_gap(&tree, value.seq)
+                {
+                    error!(
+                        "Sequence gap detected for tree {}: expected {}, got {}",
+                        tree, expected_seq, actual_seq
+                    );
+                    detected_gaps.push(SequenceGap {
+                        tree,
+                        expected_seq,
+                        actual_seq,
+                    });
+                }
 
-            // Update highest sequence numbers for each tree
-            if let Some(slot) = slot {
-                for ((tree, _leaf_index), value) in &merged.indexed_merkle_tree_updates {
-                    if let Err(e) = TreeInfo::update_highest_seq(tree, value.seq, slot) {
-                        error!("Failed to update highest sequence for tree {}: {}", tree, e);
-                    }
+                // Update highest sequence numbers for each tree
+                if let Err(e) = TreeInfo::update_highest_seq(&tree, value.seq, slot) {
+                    error!("Failed to update highest sequence for tree {}: {}", tree, e);
                 }
             }
         }
-
         // If gaps were detected, return error
         if !detected_gaps.is_empty() {
             return Err(SequenceGapError::GapDetected(detected_gaps));
