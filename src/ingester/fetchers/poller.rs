@@ -103,17 +103,53 @@ fn pop_cached_blocks_to_index(
             Some(&slot) => slot,
             None => break,
         };
+
+        // Case 1: This block is older than what we've already indexed - discard it
+        if min_slot <= last_indexed_slot {
+            block_cache.remove(&min_slot);
+            continue;
+        }
+
         let block: &BlockInfo = block_cache.get(&min_slot).unwrap();
+
+        // Case 2: Check if this block can be connected to our last indexed slot
         if block.metadata.parent_slot == last_indexed_slot {
-            last_indexed_slot = block.metadata.slot;
-            blocks.push(block.clone());
-            block_cache.remove(&min_slot);
-        } else if min_slot < last_indexed_slot {
-            block_cache.remove(&min_slot);
-        } else {
+            // Direct succession - always allowed
+            // Log if there were skipped slots
+            if min_slot > last_indexed_slot + 1 {
+                // Direct parent match but there's a gap in slot numbers
+                log::info!(
+                    "Block at slot {} directly follows {} (slots {}-{} were skipped)",
+                    min_slot,
+                    last_indexed_slot,
+                    last_indexed_slot + 1,
+                    min_slot - 1
+                );
+            }
+            // Process only ONE block at a time to ensure strict ordering
             break;
         }
+
+        // Case 3: This block's parent is in the future - we're missing intermediate blocks
+        if block.metadata.parent_slot > last_indexed_slot {
+            // Wait for the intermediate blocks to arrive or be marked as skipped
+            break;
+        }
+
+        // Case 4: This block's parent is before our last indexed slot
+        // This indicates a fork or invalid block - discard it
+        if block.metadata.parent_slot < last_indexed_slot {
+            log::warn!(
+                "Discarding block at slot {} with parent {} (last indexed: {})",
+                min_slot,
+                block.metadata.parent_slot,
+                last_indexed_slot
+            );
+            block_cache.remove(&min_slot);
+            continue;
+        }
     }
+
     (blocks, last_indexed_slot)
 }
 
