@@ -78,6 +78,7 @@ fn all_indexing_methodologies(
                         },
                         ..Default::default()
                     },
+                    None,
                 ).await
                 .unwrap();
 
@@ -497,7 +498,7 @@ async fn test_index_block_metadata(
 
     let slot = 254170887;
     let block = cached_fetch_block(&setup.name, setup.client.clone(), slot).await;
-    index_block(&setup.db_conn, &block).await.unwrap();
+    index_block(&setup.db_conn, &block, None).await.unwrap();
     let filter = blocks::Column::Slot.eq(block.metadata.slot);
 
     let block_model = blocks::Entity::find()
@@ -523,12 +524,12 @@ async fn test_index_block_metadata(
     assert_eq!(block_model.block_time, 1710441678);
 
     // Verify that we don't get an error if we try to index the same block again
-    index_block(&setup.db_conn, &block).await.unwrap();
+    index_block(&setup.db_conn, &block, None).await.unwrap();
     assert_eq!(setup.api.get_indexer_slot().await.unwrap().0, slot);
 
     // Verify that get_indexer_slot() gets updated a new block is indexed.
     let block = cached_fetch_block(&setup.name, setup.client.clone(), slot + 1).await;
-    index_block(&setup.db_conn, &block).await.unwrap();
+    index_block(&setup.db_conn, &block, None).await.unwrap();
     assert_eq!(setup.api.get_indexer_slot().await.unwrap().0, slot + 1);
 }
 
@@ -551,7 +552,7 @@ async fn test_get_latest_non_voting_signatures(
 
     let slot = 270893658;
     let block = cached_fetch_block(&setup.name, setup.client.clone(), slot).await;
-    index_block(&setup.db_conn, &block).await.unwrap();
+    index_block(&setup.db_conn, &block, None).await.unwrap();
     let all_nonvoting_transactions = setup
         .api
         .get_latest_non_voting_signatures(GetLatestSignaturesRequest {
@@ -586,7 +587,7 @@ async fn test_get_latest_non_voting_signatures_with_failures(
 
     let slot = 279620356;
     let block = cached_fetch_block(&setup.name, setup.client.clone(), slot).await;
-    index_block(&setup.db_conn, &block).await.unwrap();
+    index_block(&setup.db_conn, &block, None).await.unwrap();
     let all_nonvoting_transactions = setup
         .api
         .get_latest_non_voting_signatures(GetLatestSignaturesRequest {
