@@ -1,3 +1,4 @@
+use crate::ingester::detect_gaps::SequenceEntry;
 use lazy_static::lazy_static;
 use light_compressed_account::TreeType;
 use solana_pubkey::{pubkey, Pubkey};
@@ -9,6 +10,37 @@ pub struct TreeInfo {
     pub queue: Pubkey,
     pub height: u32,
     pub tree_type: TreeType,
+}
+
+#[derive(Debug, Clone)]
+pub enum TreeTypeSeq {
+    StateV1(SequenceEntry),
+    // Output queue (leaf index), Input queue index, Batch event seq with context
+    StateV2(StateV2SeqWithContext),
+    // event seq with complete context
+    AddressV1(SequenceEntry),
+    // Input queue index, Batch event seq with context
+    AddressV2(SequenceEntry, SequenceEntry), // (input_queue_entry, batch_event_entry)
+}
+
+impl Default for TreeTypeSeq {
+    fn default() -> Self {
+        TreeTypeSeq::StateV1(SequenceEntry::default())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StateV2Seq {
+    pub input_queue_index: u64,
+    pub batch_event_seq: u64,
+    pub output_queue_index: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StateV2SeqWithContext {
+    pub input_queue_entry: Option<SequenceEntry>,
+    pub batch_event_entry: Option<SequenceEntry>,
+    pub output_queue_entry: Option<SequenceEntry>,
 }
 
 impl TreeInfo {
