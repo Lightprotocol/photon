@@ -29,9 +29,9 @@ use super::super::error::PhotonApiError;
 pub const PAGE_LIMIT: u64 = 1000;
 
 pub fn parse_decimal(value: Decimal) -> Result<u64, PhotonApiError> {
+    // Use try_into to avoid precision loss from string conversion
     value
-        .to_string()
-        .parse::<u64>()
+        .try_into()
         .map_err(|_| PhotonApiError::UnexpectedError("Invalid decimal value".to_string()))
 }
 
