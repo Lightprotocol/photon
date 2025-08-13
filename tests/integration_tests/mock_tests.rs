@@ -1671,3 +1671,234 @@ async fn test_update_indexed_merkle_tree(
         assert_eq!(tree_model.seq, Some(1i64));
     }
 }
+
+// Discriminator serialization tests
+#[tokio::test]
+async fn test_discriminator_serializes_as_string() {
+    // Test the discriminator value from the original precision loss issue
+    let bytes = [247u8, 237, 227, 245, 215, 195, 222, 70];
+    let expected_u64 = u64::from_le_bytes(bytes);
+
+    let account_data = AccountData {
+        discriminator: UnsignedInteger(expected_u64),
+        data: Base64String(vec![1, 2, 3]),
+        data_hash: Hash::default(),
+    };
+
+    // Serialize to JSON
+    let json = serde_json::to_string(&account_data).unwrap();
+
+    // Verify discriminator is serialized as a string, not a number
+    assert!(
+        json.contains(&format!("\"discriminator\":\"{}\"", expected_u64)),
+        "Discriminator should be serialized as string, got: {}",
+        json
+    );
+
+    // Verify it doesn't contain the number format
+    assert!(
+        !json.contains(&format!("\"discriminator\":{}", expected_u64)),
+        "Discriminator should not be serialized as number, got: {}",
+        json
+    );
+}
+
+#[tokio::test]
+async fn test_discriminator_prevents_javascript_precision_loss() {
+    use sqlx::types::Decimal;
+
+    // Test with the original precision loss discriminator value from your issue
+    let bytes = [247u8, 237, 227, 245, 215, 195, 222, 70];
+    let original_discriminator = u64::from_le_bytes(bytes);
+    println!("Original discriminator: {}", original_discriminator);
+
+    // The precision loss you experienced was likely from JavaScript, not Rust
+    // But let's test that our string serialization prevents JavaScript precision loss
+
+    // Test that our AccountData serializes the discriminator as a string
+    let account_data = AccountData {
+        discriminator: UnsignedInteger(original_discriminator),
+        data: Base64String(vec![]),
+        data_hash: Hash::default(),
+    };
+
+    let json = serde_json::to_string(&account_data).unwrap();
+    println!("JSON output: {}", json);
+
+    // Should be serialized as string to prevent JavaScript precision loss
+    assert!(
+        json.contains(&format!("\"discriminator\":\"{}\"", original_discriminator)),
+        "Discriminator should be serialized as string to prevent JS precision loss, got: {}",
+        json
+    );
+
+    // Should NOT be serialized as a number
+    assert!(
+        !json.contains(&format!("\"discriminator\":{}", original_discriminator)),
+        "Discriminator should not be serialized as number, got: {}",
+        json
+    );
+
+    // Test with a value that definitely exceeds JavaScript's MAX_SAFE_INTEGER
+    let js_unsafe_value = 9007199254740993u64; // MAX_SAFE_INTEGER + 2
+    println!("JavaScript unsafe value: {}", js_unsafe_value);
+
+    let unsafe_account_data = AccountData {
+        discriminator: UnsignedInteger(js_unsafe_value),
+        data: Base64String(vec![]),
+        data_hash: Hash::default(),
+    };
+
+    let unsafe_json = serde_json::to_string(&unsafe_account_data).unwrap();
+    println!("Unsafe JSON output: {}", unsafe_json);
+
+    // This should also be serialized as string
+    assert!(
+        unsafe_json.contains(&format!("\"discriminator\":\"{}\"", js_unsafe_value)),
+        "JavaScript-unsafe discriminator should be serialized as string, got: {}",
+        unsafe_json
+    );
+
+    // Verify both conversions work correctly in Rust (the issue was client-side)
+    let decimal_val = Decimal::from(original_discriminator);
+    let fixed_parsed: u64 = decimal_val.try_into().unwrap();
+    assert_eq!(
+        original_discriminator, fixed_parsed,
+        "Fixed conversion should preserve precision! Expected: {}, Got: {}",
+        original_discriminator, fixed_parsed
+    );
+
+    // The key fix: our discriminator is now serialized as a STRING in JSON
+    // This prevents JavaScript precision loss on the client side
+    println!(
+        "✅ SUCCESS: Discriminator serialized as string: \"{}\"",
+        original_discriminator
+    );
+    println!("✅ This prevents JavaScript precision loss for values > MAX_SAFE_INTEGER");
+}
+
+#[tokio::test]
+async fn test_discriminator_with_max_u64() {
+    // Test with u64::MAX
+    let max_discriminator = u64::MAX;
+
+    let account_data = AccountData {
+        discriminator: UnsignedInteger(max_discriminator),
+        data: Base64String(vec![]),
+        data_hash: Hash::default(),
+    };
+
+    let json = serde_json::to_string(&account_data).unwrap();
+
+    // Should be serialized as string
+    assert!(
+        json.contains(&format!("\"discriminator\":\"{}\"", max_discriminator)),
+        "MAX u64 discriminator should be serialized as string, got: {}",
+        json
+    );
+}
+
+#[tokio::test]
+async fn test_discriminator_zero_value() {
+    // Test with zero value
+    let account_data = AccountData {
+        discriminator: UnsignedInteger(0),
+        data: Base64String(vec![]),
+        data_hash: Hash::default(),
+    };
+
+    let json = serde_json::to_string(&account_data).unwrap();
+
+    // Should be serialized as string "0"
+    assert!(
+        json.contains("\"discriminator\":\"0\""),
+        "Zero discriminator should be serialized as string, got: {}",
+        json
+    );
+}
+
+#[named]
+#[rstest]
+#[tokio::test]
+#[serial]
+async fn test_api_discriminator_serialization_integration(
+    #[values(DatabaseBackend::Sqlite, DatabaseBackend::Postgres)] db_backend: DatabaseBackend,
+) {
+    let name = trim_test_name(function_name!());
+    let setup = setup(name, db_backend).await;
+
+    // HACK: We index a block so that API methods can fetch the current slot.
+    index_block(
+        &setup.db_conn,
+        &BlockInfo {
+            metadata: BlockMetadata {
+                slot: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut state_update = StateUpdate::new();
+
+    // Test with the original precision loss discriminator value
+    let bytes = [247u8, 237, 227, 245, 215, 195, 222, 70];
+    let expected_u64 = u64::from_le_bytes(bytes);
+
+    let account = Account {
+        hash: Hash::new_unique(),
+        address: Some(SerializablePubkey::new_unique()),
+        data: Some(AccountData {
+            discriminator: UnsignedInteger(expected_u64),
+            data: Base64String(vec![1; 500]),
+            data_hash: Hash::new_unique(),
+        }),
+        owner: SerializablePubkey::new_unique(),
+        lamports: UnsignedInteger(1000),
+        tree: SerializablePubkey::new_unique(),
+        leaf_index: UnsignedInteger(0),
+        seq: Some(UnsignedInteger(0)),
+        slot_created: UnsignedInteger(0),
+    };
+
+    state_update.out_accounts.push(AccountWithContext {
+        account: account.clone(),
+        context: AccountContext::default(),
+    });
+    persist_state_update_using_connection(&setup.db_conn, state_update)
+        .await
+        .unwrap();
+
+    let request = CompressedAccountRequest {
+        address: None,
+        hash: Some(account.hash.clone()),
+    };
+
+    // Test V1 endpoint
+    let res_v1 = setup
+        .api
+        .get_compressed_account(request.clone())
+        .await
+        .unwrap();
+
+    // Serialize the response to JSON to verify discriminator format
+    let json_v1 = serde_json::to_string(&res_v1).unwrap();
+    assert!(
+        json_v1.contains(&format!("\"discriminator\":\"{}\"", expected_u64)),
+        "V1 endpoint should serialize discriminator as string, got: {}",
+        json_v1
+    );
+
+    // Test V2 endpoint
+    let res_v2 = setup.api.get_compressed_account_v2(request).await.unwrap();
+
+    // Serialize the response to JSON to verify discriminator format
+    let json_v2 = serde_json::to_string(&res_v2).unwrap();
+    assert!(
+        json_v2.contains(&format!("\"discriminator\":\"{}\"", expected_u64)),
+        "V2 endpoint should serialize discriminator as string, got: {}",
+        json_v2
+    );
+}

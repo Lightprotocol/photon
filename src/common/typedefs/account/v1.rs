@@ -29,9 +29,21 @@ pub struct Account {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccountData {
+    #[serde(serialize_with = "serialize_discriminator_as_string")]
     pub discriminator: UnsignedInteger,
     pub data: Base64String,
     pub data_hash: Hash,
+}
+
+// Fixes precision loss.
+fn serialize_discriminator_as_string<S>(
+    discriminator: &UnsignedInteger,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&discriminator.0.to_string())
 }
 
 impl TryFrom<Model> for Account {
@@ -68,5 +80,101 @@ impl TryFrom<Model> for Account {
             slot_created: UnsignedInteger(account.slot_created as u64),
             seq: account.seq.map(|seq| UnsignedInteger(seq as u64)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_discriminator_serializes_as_string() {
+        // Test the discriminator value from the original precision loss issue
+        let bytes = [247u8, 237, 227, 245, 215, 195, 222, 70];
+        let expected_u64 = u64::from_le_bytes(bytes);
+
+        let account_data = AccountData {
+            discriminator: UnsignedInteger(expected_u64),
+            data: Base64String(vec![1, 2, 3]),
+            data_hash: Hash::default(),
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&account_data).unwrap();
+
+        // Verify discriminator is serialized as a string, not a number
+        assert!(
+            json.contains(&format!("\"discriminator\":\"{}\"", expected_u64)),
+            "Discriminator should be serialized as string, got: {}",
+            json
+        );
+
+        // Verify it doesn't contain the number format
+        assert!(
+            !json.contains(&format!("\"discriminator\":{}", expected_u64)),
+            "Discriminator should not be serialized as number, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_discriminator_prevents_javascript_precision_loss() {
+        // Test with a value that exceeds JavaScript's MAX_SAFE_INTEGER
+        let large_discriminator = 9007199254740992u64; // MAX_SAFE_INTEGER + 1
+
+        let account_data = AccountData {
+            discriminator: UnsignedInteger(large_discriminator),
+            data: Base64String(vec![]),
+            data_hash: Hash::default(),
+        };
+
+        let json = serde_json::to_string(&account_data).unwrap();
+
+        // Should be serialized as string
+        assert!(
+            json.contains(&format!("\"discriminator\":\"{}\"", large_discriminator)),
+            "Large discriminator should be serialized as string to prevent JS precision loss, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_discriminator_with_max_u64() {
+        // Test with u64::MAX
+        let max_discriminator = u64::MAX;
+
+        let account_data = AccountData {
+            discriminator: UnsignedInteger(max_discriminator),
+            data: Base64String(vec![]),
+            data_hash: Hash::default(),
+        };
+
+        let json = serde_json::to_string(&account_data).unwrap();
+
+        // Should be serialized as string
+        assert!(
+            json.contains(&format!("\"discriminator\":\"{}\"", max_discriminator)),
+            "MAX u64 discriminator should be serialized as string, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_discriminator_zero_value() {
+        // Test with zero value
+        let account_data = AccountData {
+            discriminator: UnsignedInteger(0),
+            data: Base64String(vec![]),
+            data_hash: Hash::default(),
+        };
+
+        let json = serde_json::to_string(&account_data).unwrap();
+
+        // Should be serialized as string "0"
+        assert!(
+            json.contains("\"discriminator\":\"0\""),
+            "Zero discriminator should be serialized as string, got: {}",
+            json
+        );
     }
 }
