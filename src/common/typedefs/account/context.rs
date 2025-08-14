@@ -1,5 +1,5 @@
 use crate::api::error::PhotonApiError;
-use crate::api::method::utils::{parse_decimal, parse_leaf_index};
+use crate::api::method::utils::{parse_decimal, parse_discriminator_string, parse_leaf_index};
 use crate::common::typedefs::account::{Account, AccountData};
 use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::hash::Hash;
@@ -71,10 +71,18 @@ impl AccountWithContext {
             data,
         } = compressed_account;
 
-        let data = data.map(|d| AccountData {
-            discriminator: UnsignedInteger(LittleEndian::read_u64(&d.discriminator)),
-            data: Base64String(d.data),
-            data_hash: Hash::from(d.data_hash),
+        let data = data.map(|d| {
+            let discriminator_u64 = LittleEndian::read_u64(&d.discriminator);
+            log::debug!(
+                "🔍 DISCRIMINATOR INDEXED: bytes={:?} → u64={}",
+                d.discriminator,
+                discriminator_u64
+            );
+            AccountData {
+                discriminator: UnsignedInteger(discriminator_u64),
+                data: Base64String(d.data),
+                data_hash: Hash::from(d.data_hash),
+            }
         });
 
         Self {
@@ -111,7 +119,7 @@ impl TryFrom<Model> for AccountWithContext {
             (Some(data), Some(data_hash), Some(discriminator)) => Some(AccountData {
                 data: Base64String(data),
                 data_hash: data_hash.try_into()?,
-                discriminator: UnsignedInteger(parse_decimal(discriminator)?),
+                discriminator: UnsignedInteger(parse_discriminator_string(discriminator)?),
             }),
             (None, None, None) => None,
             _ => {

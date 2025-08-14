@@ -413,11 +413,15 @@ async fn append_output_accounts(
         account_models.push(accounts::ActiveModel {
             hash: Set(account.account.hash.to_vec()),
             address: Set(account.account.address.map(|x| x.to_bytes_vec())),
-            discriminator: Set(account
-                .account
-                .data
-                .as_ref()
-                .map(|x| Decimal::from(x.discriminator.0))),
+            discriminator: Set(account.account.data.as_ref().map(|x| {
+                let discriminator_string = x.discriminator.0.to_string();
+                log::debug!(
+                    "💾 DISCRIMINATOR STORED: u64={} → string='{}'",
+                    x.discriminator.0,
+                    discriminator_string
+                );
+                discriminator_string
+            })),
             data: Set(account.account.data.as_ref().map(|x| x.data.clone().0)),
             data_hash: Set(account.account.data.as_ref().map(|x| x.data_hash.to_vec())),
             tree: Set(account.account.tree.to_bytes_vec()),

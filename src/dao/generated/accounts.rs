@@ -19,8 +19,7 @@ pub struct Model {
     pub prev_spent: Option<bool>,
     #[sea_orm(column_type = "Decimal(Some((23, 0)))")]
     pub lamports: Decimal,
-    #[sea_orm(column_type = "Decimal(Some((23, 0)))", nullable)]
-    pub discriminator: Option<Decimal>,
+    pub discriminator: Option<String>,
     pub tree_type: Option<i32>,
     pub nullified_in_tree: bool,
     pub nullifier_queue_index: Option<i64>,

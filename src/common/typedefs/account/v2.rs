@@ -1,6 +1,6 @@
 use crate::api::error::PhotonApiError;
 use crate::api::method::get_validity_proof::MerkleContextV2;
-use crate::api::method::utils::parse_decimal;
+use crate::api::method::utils::{parse_decimal, parse_discriminator_string};
 use crate::common::typedefs::account::AccountData;
 use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::hash::Hash;
@@ -42,7 +42,7 @@ impl TryFrom<Model> for AccountV2 {
             (Some(data), Some(data_hash), Some(discriminator)) => Some(AccountData {
                 data: Base64String(data),
                 data_hash: data_hash.try_into()?,
-                discriminator: UnsignedInteger(parse_decimal(discriminator)?),
+                discriminator: UnsignedInteger(parse_discriminator_string(discriminator)?),
             }),
             (None, None, None) => None,
             _ => {

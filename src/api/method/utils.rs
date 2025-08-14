@@ -35,6 +35,20 @@ pub fn parse_decimal(value: Decimal) -> Result<u64, PhotonApiError> {
         .map_err(|_| PhotonApiError::UnexpectedError("Invalid decimal value".to_string()))
 }
 
+pub fn parse_discriminator_string(value: String) -> Result<u64, PhotonApiError> {
+    // Parse discriminator from string to avoid precision loss
+    let parsed_u64 = value
+        .parse::<u64>()
+        .map_err(|_| PhotonApiError::UnexpectedError("Invalid discriminator string".to_string()))?;
+
+    log::debug!(
+        "📖 DISCRIMINATOR RETRIEVED: string='{}' → u64={}",
+        value,
+        parsed_u64
+    );
+    Ok(parsed_u64)
+}
+
 pub(crate) fn parse_leaf_index(leaf_index: i64) -> Result<u64, PhotonApiError> {
     leaf_index
         .try_into()
