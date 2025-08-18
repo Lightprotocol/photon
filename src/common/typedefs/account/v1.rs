@@ -44,11 +44,6 @@ where
     S: serde::Serializer,
 {
     let discriminator_string = discriminator.0.to_string();
-    log::debug!(
-        "📤 DISCRIMINATOR RETURNED: u64={} → JSON string='{}'",
-        discriminator.0,
-        discriminator_string
-    );
     serializer.serialize_str(&discriminator_string)
 }
 

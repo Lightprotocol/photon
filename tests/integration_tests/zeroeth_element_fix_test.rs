@@ -145,8 +145,6 @@ async fn test_reindex_fixes_wrong_zeroeth_element(
     let expected_zeroeth = get_zeroeth_exclusion_range_v1(tree_bytes.clone());
     assert_eq!(fixed_zeroeth.next_index, expected_zeroeth.next_index);
     assert_eq!(fixed_zeroeth.value, expected_zeroeth.value);
-
-    println!("✅ Re-indexing successfully fixed zeroeth element from wrong v2-style (next_index=0) to correct v1-style (next_index=1)");
 }
 
 #[named]
@@ -233,6 +231,4 @@ async fn test_reindex_preserves_correct_zeroeth_element(
         "Zeroeth element should still be correct"
     );
     assert_eq!(zeroeth.seq, Some(1), "Seq should be updated");
-
-    println!("✅ Re-indexing preserves already correct zeroeth elements");
 }

@@ -1771,10 +1771,10 @@ async fn test_discriminator_prevents_javascript_precision_loss() {
     // The key fix: our discriminator is now serialized as a STRING in JSON
     // This prevents JavaScript precision loss on the client side
     println!(
-        "✅ SUCCESS: Discriminator serialized as string: \"{}\"",
+        "SUCCESS: Discriminator serialized as string: \"{}\"",
         original_discriminator
     );
-    println!("✅ This prevents JavaScript precision loss for values > MAX_SAFE_INTEGER");
+    println!("This prevents JavaScript precision loss for values > MAX_SAFE_INTEGER");
 }
 
 #[tokio::test]

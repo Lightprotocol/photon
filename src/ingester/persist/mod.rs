@@ -426,11 +426,6 @@ async fn append_output_accounts(
             address: Set(account.account.address.map(|x| x.to_bytes_vec())),
             discriminator: Set(account.account.data.as_ref().map(|x| {
                 let discriminator_string = x.discriminator.0.to_string();
-                log::debug!(
-                    "💾 DISCRIMINATOR STORED: u64={} → string='{}'",
-                    x.discriminator.0,
-                    discriminator_string
-                );
                 discriminator_string
             })),
             data: Set(account.account.data.as_ref().map(|x| x.data.clone().0)),
