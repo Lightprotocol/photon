@@ -246,12 +246,15 @@ async fn persist_state_tree_history(
 pub fn parse_token_data(account: &Account) -> Result<Option<TokenData>, IngesterError> {
     match account.data.clone() {
         Some(data) => {
-            let is_v1_token = data.discriminator.0.to_ne_bytes() == [2, 0, 0, 0, 0, 0, 0, 0]; // V1 discriminator
-            let is_v2_token = data.discriminator.0.to_ne_bytes() == [0, 0, 0, 0, 0, 0, 0, 3]; // V2 discriminator
-            println!("discriminator: {:?}", data.discriminator);
-            println!("discriminator.0: {:?}", data.discriminator.0);
+            let is_v1_token = data.discriminator.0.to_le_bytes() == [2, 0, 0, 0, 0, 0, 0, 0]; // V1 discriminator
+            let is_v2_token = data.discriminator.0.to_le_bytes() == [0, 0, 0, 0, 0, 0, 0, 3]; // V2 discriminator
+
+            // TODO: remove after debugging.
+            println!("ingested data.discriminator: {:?}", data.discriminator);
+            println!("ingested data.discriminator.0: {:?}", data.discriminator.0);
             println!("is_v1_token: {:?}", is_v1_token);
             println!("is_v2_token: {:?}", is_v2_token);
+            if account.owner.0 == COMPRESSED_TOKEN_PROGRAM && (is_v1_token) {}
             if account.owner.0 == COMPRESSED_TOKEN_PROGRAM && (is_v1_token || is_v2_token) {
                 let data_slice = data.data.0.as_slice();
                 let token_data = TokenData::try_from_slice(data_slice).map_err(|e| {
