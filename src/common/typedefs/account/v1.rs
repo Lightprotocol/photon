@@ -1,9 +1,9 @@
 use crate::api::error::PhotonApiError;
-use crate::api::method::utils::parse_decimal;
+use crate::api::method::utils::{parse_decimal, parse_u64_string};
 use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
-use crate::common::typedefs::unsigned_integer::UnsignedInteger;
+use crate::common::typedefs::unsigned_integer::{serialize_u64_as_string, UnsignedInteger};
 use crate::dao::generated::accounts::Model;
 use jsonrpsee_core::Serialize;
 use utoipa::ToSchema;
@@ -15,6 +15,7 @@ pub struct Account {
     pub address: Option<SerializablePubkey>,
     pub data: Option<AccountData>,
     pub owner: SerializablePubkey,
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub lamports: UnsignedInteger,
     pub tree: SerializablePubkey,
     pub leaf_index: UnsignedInteger,
@@ -29,6 +30,7 @@ pub struct Account {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccountData {
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub discriminator: UnsignedInteger,
     pub data: Base64String,
     pub data_hash: Hash,
@@ -42,7 +44,7 @@ impl TryFrom<Model> for Account {
             (Some(data), Some(data_hash), Some(discriminator)) => Some(AccountData {
                 data: Base64String(data),
                 data_hash: data_hash.try_into()?,
-                discriminator: UnsignedInteger(parse_decimal(discriminator)?),
+                discriminator: UnsignedInteger(parse_u64_string(discriminator)?),
             }),
             (None, None, None) => None,
             _ => {
@@ -68,5 +70,153 @@ impl TryFrom<Model> for Account {
             slot_created: UnsignedInteger(account.slot_created as u64),
             seq: account.seq.map(|seq| UnsignedInteger(seq as u64)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_discriminator_serializes_as_string() {
+        // Test the discriminator value from the original precision loss issue
+        let bytes = [247u8, 237, 227, 245, 215, 195, 222, 70];
+        let expected_u64 = u64::from_le_bytes(bytes);
+
+        let account_data = AccountData {
+            discriminator: UnsignedInteger(expected_u64),
+            data: Base64String(vec![1, 2, 3]),
+            data_hash: Hash::default(),
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&account_data).unwrap();
+
+        // Verify discriminator is serialized as a string, not a number
+        assert!(
+            json.contains(&format!("\"discriminator\":\"{}\"", expected_u64)),
+            "Discriminator should be serialized as string, got: {}",
+            json
+        );
+
+        // Verify it doesn't contain the number format
+        assert!(
+            !json.contains(&format!("\"discriminator\":{}", expected_u64)),
+            "Discriminator should not be serialized as number, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_discriminator_prevents_javascript_precision_loss() {
+        // Test with a value that exceeds JavaScript's MAX_SAFE_INTEGER
+        let large_discriminator = 9007199254740992u64; // MAX_SAFE_INTEGER + 1
+
+        let account_data = AccountData {
+            discriminator: UnsignedInteger(large_discriminator),
+            data: Base64String(vec![]),
+            data_hash: Hash::default(),
+        };
+
+        let json = serde_json::to_string(&account_data).unwrap();
+
+        // Should be serialized as string
+        assert!(
+            json.contains(&format!("\"discriminator\":\"{}\"", large_discriminator)),
+            "Large discriminator should be serialized as string to prevent JS precision loss, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_discriminator_with_max_u64() {
+        // Test with u64::MAX
+        let max_discriminator = u64::MAX;
+
+        let account_data = AccountData {
+            discriminator: UnsignedInteger(max_discriminator),
+            data: Base64String(vec![]),
+            data_hash: Hash::default(),
+        };
+
+        let json = serde_json::to_string(&account_data).unwrap();
+
+        // Should be serialized as string
+        assert!(
+            json.contains(&format!("\"discriminator\":\"{}\"", max_discriminator)),
+            "MAX u64 discriminator should be serialized as string, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_discriminator_zero_value() {
+        // Test with zero value
+        let account_data = AccountData {
+            discriminator: UnsignedInteger(0),
+            data: Base64String(vec![]),
+            data_hash: Hash::default(),
+        };
+
+        let json = serde_json::to_string(&account_data).unwrap();
+
+        // Should be serialized as string "0"
+        assert!(
+            json.contains("\"discriminator\":\"0\""),
+            "Zero discriminator should be serialized as string, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_lamports_serializes_as_string() {
+        // Test that lamports field is serialized as string
+        let account = Account {
+            hash: Hash::default(),
+            address: None,
+            data: None,
+            owner: SerializablePubkey::default(),
+            lamports: UnsignedInteger(1000000000), // 1 SOL
+            tree: SerializablePubkey::default(),
+            leaf_index: UnsignedInteger(0),
+            seq: Some(UnsignedInteger(1)),
+            slot_created: UnsignedInteger(100),
+        };
+
+        let json = serde_json::to_string(&account).unwrap();
+
+        // Verify lamports is serialized as string
+        assert!(
+            json.contains("\"lamports\":\"1000000000\""),
+            "Lamports should be serialized as string, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_lamports_prevents_javascript_precision_loss() {
+        // Test with a value that exceeds JavaScript's MAX_SAFE_INTEGER
+        let large_lamports = 9007199254740992u64; // MAX_SAFE_INTEGER + 1
+
+        let account = Account {
+            hash: Hash::default(),
+            address: None,
+            data: None,
+            owner: SerializablePubkey::default(),
+            lamports: UnsignedInteger(large_lamports),
+            tree: SerializablePubkey::default(),
+            leaf_index: UnsignedInteger(0),
+            seq: None,
+            slot_created: UnsignedInteger(0),
+        };
+
+        let json = serde_json::to_string(&account).unwrap();
+
+        // Should be serialized as string
+        assert!(
+            json.contains(&format!("\"lamports\":\"{}\"", large_lamports)),
+            "Large lamports should be serialized as string to prevent JS precision loss, got: {}",
+            json
+        );
     }
 }

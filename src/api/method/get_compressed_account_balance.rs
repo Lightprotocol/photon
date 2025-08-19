@@ -5,7 +5,6 @@ use crate::common::typedefs::context::Context;
 use crate::common::typedefs::unsigned_integer::UnsignedInteger;
 use crate::dao::generated::accounts;
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
-use sqlx::types::Decimal;
 
 pub async fn get_compressed_account_balance(
     conn: &DatabaseConnection,
@@ -22,7 +21,7 @@ pub async fn get_compressed_account_balance(
         .one(conn)
         .await?
         .map(|x| x.lamports)
-        .unwrap_or(Decimal::from(0));
+        .unwrap_or_else(|| "0".to_string());
 
     Ok(AccountBalanceResponse {
         value: UnsignedInteger(parse_decimal(balance)?),

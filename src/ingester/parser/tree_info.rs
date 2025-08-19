@@ -259,6 +259,10 @@ lazy_static! {
                 pubkey!("bmt5yU97jC88YXTuSukYHa8Z5Bi2ZDUtmzfkDTA2mG2"),
                 pubkey!("oq5oh5ZR3yGomuQgFduNDzjtGvVWfDRGLuDVjv9a96P"),
             ),
+            (
+                pubkey!("2Yb3fGo2E9aWLjY8KuESaqurYpGGhEeJr7eynKrSgXwS"),
+                pubkey!("12wJT3xYd46rtjeqDU6CrtT8unqLjPiheggzqhN9YsyB"),
+            ),
         ];
 
         let address_trees_v2 = [

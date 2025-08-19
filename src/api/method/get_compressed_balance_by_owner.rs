@@ -28,7 +28,7 @@ pub async fn get_compressed_balance_by_owner(
         .into_model::<LamportModel>()
         .all(conn)
         .await?
-        .iter()
+        .into_iter()
         .map(|x| parse_decimal(x.lamports))
         .collect::<Result<Vec<u64>, PhotonApiError>>()?;
 

@@ -65,6 +65,7 @@ pub fn parse_transaction(tx: &TransactionInfo, slot: u64) -> Result<StateUpdate,
             is_compression_transaction = true;
             state_updates.push(state_update);
         } else {
+            println!("No batch event found, parsing legacy event");
             for (index, instruction) in ordered_instructions.iter().enumerate() {
                 if ordered_instructions.len() - index > 1 {
                     if get_compression_program_id() == instruction.program_id {

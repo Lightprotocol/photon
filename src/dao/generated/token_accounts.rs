@@ -13,8 +13,7 @@ pub struct Model {
     pub state: i32,
     pub spent: bool,
     pub prev_spent: Option<bool>,
-    #[sea_orm(column_type = "Decimal(Some((23, 0)))")]
-    pub amount: Decimal,
+    pub amount: String,
     pub tlv: Option<Vec<u8>>,
 }
 
