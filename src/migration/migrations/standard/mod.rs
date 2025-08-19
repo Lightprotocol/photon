@@ -10,6 +10,7 @@ pub mod m20250206_000007_init;
 pub mod m20250314_000008_init;
 pub mod m20250617_000152_fix_indexed_trees_unique_constraint;
 pub mod m20250814_000009_fix_discriminator_precision;
+pub mod m20250815_000010_fix_amounts_precision;
 
 pub fn get_standard_migrations() -> Vec<Box<dyn MigrationTrait>> {
     vec![
@@ -23,5 +24,6 @@ pub fn get_standard_migrations() -> Vec<Box<dyn MigrationTrait>> {
         Box::new(m20250314_000008_init::Migration),
         Box::new(m20250617_000152_fix_indexed_trees_unique_constraint::Migration),
         Box::new(m20250814_000009_fix_discriminator_precision::Migration),
+        Box::new(m20250815_000010_fix_amounts_precision::Migration),
     ]
 }

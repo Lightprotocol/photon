@@ -90,3 +90,15 @@ impl anchor_lang::AnchorSerialize for UnsignedInteger {
         writer.write_all(&self.0.to_le_bytes())
     }
 }
+
+/// Serialize u64 as string to prevent precision loss using SQLite.
+pub fn serialize_u64_as_string<S>(
+    u64_value: &UnsignedInteger,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let u64_string = u64_value.0.to_string();
+    serializer.serialize_str(&u64_string)
+}

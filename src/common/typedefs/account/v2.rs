@@ -1,11 +1,11 @@
 use crate::api::error::PhotonApiError;
 use crate::api::method::get_validity_proof::MerkleContextV2;
-use crate::api::method::utils::{parse_decimal, parse_discriminator_string};
+use crate::api::method::utils::{parse_decimal, parse_u64_string};
 use crate::common::typedefs::account::AccountData;
 use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
-use crate::common::typedefs::unsigned_integer::UnsignedInteger;
+use crate::common::typedefs::unsigned_integer::{serialize_u64_as_string, UnsignedInteger};
 use crate::dao::generated::accounts::Model;
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -17,6 +17,7 @@ pub struct AccountV2 {
     pub address: Option<SerializablePubkey>,
     pub data: Option<AccountData>,
     pub owner: SerializablePubkey,
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub lamports: UnsignedInteger,
     pub leaf_index: UnsignedInteger,
     // For legacy trees is always Some() since the user tx appends directly to the Merkle tree
@@ -42,7 +43,7 @@ impl TryFrom<Model> for AccountV2 {
             (Some(data), Some(data_hash), Some(discriminator)) => Some(AccountData {
                 data: Base64String(data),
                 data_hash: data_hash.try_into()?,
-                discriminator: UnsignedInteger(parse_discriminator_string(discriminator)?),
+                discriminator: UnsignedInteger(parse_u64_string(discriminator)?),
             }),
             (None, None, None) => None,
             _ => {

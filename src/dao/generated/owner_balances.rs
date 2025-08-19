@@ -7,8 +7,7 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub owner: Vec<u8>,
-    #[sea_orm(column_type = "Decimal(Some((23, 0)))")]
-    pub lamports: Decimal,
+    pub lamports: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

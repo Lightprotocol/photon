@@ -342,14 +342,12 @@ async fn execute_account_update_query_and_update_balances(
         let prev_spent: Option<bool> = row.try_get("", "prev_spent")?;
         match (prev_spent, &modification_type) {
             (_, ModificationType::Append) | (Some(false), ModificationType::Spend) => {
-                let mut amount_of_interest = match db_backend {
-                    DatabaseBackend::Postgres => row.try_get("", balance_column)?,
-                    DatabaseBackend::Sqlite => {
-                        let amount: i64 = row.try_get("", balance_column)?;
-                        Decimal::from(amount)
-                    }
-                    _ => panic!("Unsupported database backend"),
-                };
+                let amount_str: String = row.try_get("", balance_column)?;
+                let amount_u64 = amount_str.parse::<u64>().map_err(|_| {
+                    IngesterError::DatabaseError(format!("Invalid amount string: {}", amount_str))
+                })?;
+                let amount_i64 = amount_u64 as i64;
+                let mut amount_of_interest = Decimal::from(amount_i64);
                 amount_of_interest *= multiplier;
                 let owner = bytes_to_sql_format(db_backend, row.try_get("", "owner")?);
                 let key = match account_type {
@@ -373,16 +371,36 @@ async fn execute_account_update_query_and_update_balances(
     let values = balance_modifications
         .into_iter()
         .filter(|(_, value)| *value != Decimal::from(0))
-        .map(|(key, value)| format!("({}, {})", key, value))
+        .map(|(key, value)| {
+            if db_backend == DatabaseBackend::Sqlite {
+                // For SQLite, store as TEXT
+                let value_i64: i64 = value.try_into().unwrap_or(0);
+                let value_u64 = value_i64.unsigned_abs();
+                format!("({}, '{}')", key, value_u64)
+            } else {
+                // For PostgreSQL, use numeric value
+                format!("({}, {})", key, value)
+            }
+        })
         .collect::<Vec<String>>();
 
     if !values.is_empty() {
         let values_string = values.join(", ");
-        let raw_sql = format!(
-            "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
-            VALUES {values_string} ON CONFLICT (owner{additional_columns})
-            DO UPDATE SET {balance_column} = {owner_table_name}.{balance_column} + excluded.{balance_column}",
-        );
+        let raw_sql = if txn.get_database_backend() == DatabaseBackend::Sqlite {
+            // For SQLite with TEXT columns, we need to cast to INTEGER for arithmetic
+            format!(
+                "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
+                VALUES {values_string} ON CONFLICT (owner{additional_columns})
+                DO UPDATE SET {balance_column} = CAST(CAST({owner_table_name}.{balance_column} AS INTEGER) + CAST(excluded.{balance_column} AS INTEGER) AS TEXT)",
+            )
+        } else {
+            // PostgreSQL still uses numeric types
+            format!(
+                "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
+                VALUES {values_string} ON CONFLICT (owner{additional_columns})
+                DO UPDATE SET {balance_column} = {owner_table_name}.{balance_column} + excluded.{balance_column}",
+            )
+        };
         txn.execute(Statement::from_string(db_backend, raw_sql))
             .await?;
     }
@@ -442,7 +460,7 @@ async fn append_output_accounts(
             tree_type: Set(Some(account.context.tree_type as i32)),
             nullifier: Set(account.context.nullifier.as_ref().map(|x| x.to_vec())),
             owner: Set(account.account.owner.to_bytes_vec()),
-            lamports: Set(Decimal::from(account.account.lamports.0)),
+            lamports: Set(account.account.lamports.0.to_string()),
             spent: Set(false),
             slot_created: Set(account.account.slot_created.0 as i64),
             seq: Set(account.account.seq.map(|x| x.0 as i64)),
@@ -494,7 +512,7 @@ pub async fn persist_token_accounts(
                 hash: Set(hash.into()),
                 mint: Set(token_data.mint.to_bytes_vec()),
                 owner: Set(token_data.owner.to_bytes_vec()),
-                amount: Set(Decimal::from(token_data.amount.0)),
+                amount: Set(token_data.amount.0.to_string()),
                 delegate: Set(token_data.delegate.map(|d| d.to_bytes_vec())),
                 state: Set(token_data.state as i32),
                 spent: Set(false),

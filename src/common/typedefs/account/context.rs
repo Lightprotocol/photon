@@ -1,5 +1,5 @@
 use crate::api::error::PhotonApiError;
-use crate::api::method::utils::{parse_decimal, parse_discriminator_string, parse_leaf_index};
+use crate::api::method::utils::{parse_decimal, parse_leaf_index, parse_u64_string};
 use crate::common::typedefs::account::{Account, AccountData};
 use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::hash::Hash;
@@ -115,7 +115,7 @@ impl TryFrom<Model> for AccountWithContext {
             (Some(data), Some(data_hash), Some(discriminator)) => Some(AccountData {
                 data: Base64String(data),
                 data_hash: data_hash.try_into()?,
-                discriminator: UnsignedInteger(parse_discriminator_string(discriminator)?),
+                discriminator: UnsignedInteger(parse_u64_string(discriminator)?),
             }),
             (None, None, None) => None,
             _ => {

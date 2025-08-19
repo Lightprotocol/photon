@@ -4,7 +4,7 @@ use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::serializable_signature::SerializableSignature;
 use crate::common::typedefs::token_data::{AccountState, TokenData};
 use crate::common::typedefs::unix_timestamp::UnixTimestamp;
-use crate::common::typedefs::unsigned_integer::UnsignedInteger;
+use crate::common::typedefs::unsigned_integer::{serialize_u64_as_string, UnsignedInteger};
 use crate::dao::generated::{accounts, token_accounts};
 
 use byteorder::{ByteOrder, LittleEndian};
@@ -28,24 +28,23 @@ use super::super::error::PhotonApiError;
 
 pub const PAGE_LIMIT: u64 = 1000;
 
-pub fn parse_decimal(value: Decimal) -> Result<u64, PhotonApiError> {
-    // Use try_into to avoid precision loss from string conversion
-    value
-        .try_into()
-        .map_err(|_| PhotonApiError::UnexpectedError("Invalid decimal value".to_string()))
+pub fn parse_decimal(value: String) -> Result<u64, PhotonApiError> {
+    // Parse from string to avoid precision loss
+    let parsed_u64 = value
+        .parse::<u64>()
+        .map_err(|_| PhotonApiError::UnexpectedError("Invalid decimal string".to_string()))?;
+
+    log::debug!("value RETRIEVED: string='{}' → u64={}", value, parsed_u64);
+    Ok(parsed_u64)
 }
 
-pub fn parse_discriminator_string(value: String) -> Result<u64, PhotonApiError> {
+pub fn parse_u64_string(value: String) -> Result<u64, PhotonApiError> {
     // Parse discriminator from string to avoid precision loss
     let parsed_u64 = value
         .parse::<u64>()
         .map_err(|_| PhotonApiError::UnexpectedError("Invalid discriminator string".to_string()))?;
 
-    log::debug!(
-        "📖 DISCRIMINATOR RETRIEVED: string='{}' → u64={}",
-        value,
-        parsed_u64
-    );
+    log::debug!("value RETRIEVED: string='{}' → u64={}", value, parsed_u64);
     Ok(parsed_u64)
 }
 
@@ -321,12 +320,12 @@ impl CompressedAccountRequest {
 
 #[derive(FromQueryResult)]
 pub struct BalanceModel {
-    pub amount: Decimal,
+    pub amount: String,
 }
 
 #[derive(FromQueryResult)]
 pub struct LamportModel {
-    pub lamports: Decimal,
+    pub lamports: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
@@ -622,6 +621,7 @@ pub struct GetPaginatedSignaturesResponse {
 // We do not use generics to simplify documentation generation.
 pub struct AccountBalanceResponse {
     pub context: Context,
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub value: UnsignedInteger,
 }
 

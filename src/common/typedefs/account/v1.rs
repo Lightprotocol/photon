@@ -1,9 +1,9 @@
 use crate::api::error::PhotonApiError;
-use crate::api::method::utils::{parse_decimal, parse_discriminator_string};
+use crate::api::method::utils::{parse_decimal, parse_u64_string};
 use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
-use crate::common::typedefs::unsigned_integer::UnsignedInteger;
+use crate::common::typedefs::unsigned_integer::{serialize_u64_as_string, UnsignedInteger};
 use crate::dao::generated::accounts::Model;
 use jsonrpsee_core::Serialize;
 use utoipa::ToSchema;
@@ -15,6 +15,7 @@ pub struct Account {
     pub address: Option<SerializablePubkey>,
     pub data: Option<AccountData>,
     pub owner: SerializablePubkey,
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub lamports: UnsignedInteger,
     pub tree: SerializablePubkey,
     pub leaf_index: UnsignedInteger,
@@ -29,22 +30,10 @@ pub struct Account {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccountData {
-    #[serde(serialize_with = "serialize_discriminator_as_string")]
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub discriminator: UnsignedInteger,
     pub data: Base64String,
     pub data_hash: Hash,
-}
-
-// Fixes precision loss.
-fn serialize_discriminator_as_string<S>(
-    discriminator: &UnsignedInteger,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let discriminator_string = discriminator.0.to_string();
-    serializer.serialize_str(&discriminator_string)
 }
 
 impl TryFrom<Model> for Account {
@@ -55,7 +44,7 @@ impl TryFrom<Model> for Account {
             (Some(data), Some(data_hash), Some(discriminator)) => Some(AccountData {
                 data: Base64String(data),
                 data_hash: data_hash.try_into()?,
-                discriminator: UnsignedInteger(parse_discriminator_string(discriminator)?),
+                discriminator: UnsignedInteger(parse_u64_string(discriminator)?),
             }),
             (None, None, None) => None,
             _ => {
@@ -175,6 +164,58 @@ mod tests {
         assert!(
             json.contains("\"discriminator\":\"0\""),
             "Zero discriminator should be serialized as string, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_lamports_serializes_as_string() {
+        // Test that lamports field is serialized as string
+        let account = Account {
+            hash: Hash::default(),
+            address: None,
+            data: None,
+            owner: SerializablePubkey::default(),
+            lamports: UnsignedInteger(1000000000), // 1 SOL
+            tree: SerializablePubkey::default(),
+            leaf_index: UnsignedInteger(0),
+            seq: Some(UnsignedInteger(1)),
+            slot_created: UnsignedInteger(100),
+        };
+
+        let json = serde_json::to_string(&account).unwrap();
+
+        // Verify lamports is serialized as string
+        assert!(
+            json.contains("\"lamports\":\"1000000000\""),
+            "Lamports should be serialized as string, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_lamports_prevents_javascript_precision_loss() {
+        // Test with a value that exceeds JavaScript's MAX_SAFE_INTEGER
+        let large_lamports = 9007199254740992u64; // MAX_SAFE_INTEGER + 1
+
+        let account = Account {
+            hash: Hash::default(),
+            address: None,
+            data: None,
+            owner: SerializablePubkey::default(),
+            lamports: UnsignedInteger(large_lamports),
+            tree: SerializablePubkey::default(),
+            leaf_index: UnsignedInteger(0),
+            seq: None,
+            slot_created: UnsignedInteger(0),
+        };
+
+        let json = serde_json::to_string(&account).unwrap();
+
+        // Should be serialized as string
+        assert!(
+            json.contains(&format!("\"lamports\":\"{}\"", large_lamports)),
+            "Large lamports should be serialized as string to prevent JS precision loss, got: {}",
             json
         );
     }
