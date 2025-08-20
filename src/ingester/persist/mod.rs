@@ -331,8 +331,10 @@ async fn execute_account_update_query_and_update_balances(
                 let mut amount_of_interest = match db_backend {
                     DatabaseBackend::Postgres => row.try_get("", balance_column)?,
                     DatabaseBackend::Sqlite => {
-                        let amount: i64 = row.try_get("", balance_column)?;
-                        Decimal::from(amount)
+                        let amount: f64 = row.try_get("", balance_column)?;
+                        Decimal::try_from(amount).map_err(|e| {
+                            sea_orm::DbErr::Type(format!("Failed to convert f64 to Decimal: {}", e))
+                        })?
                     }
                     _ => panic!("Unsupported database backend"),
                 };
