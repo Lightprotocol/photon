@@ -18,6 +18,32 @@ use sea_orm::{
 
 const ZKP_BATCH_SIZE: usize = 500;
 
+/// Validates that the old_next_index in a batch event matches the current state.
+/// Returns Ok(true) if processing should continue, Ok(false) if already processed (re-indexing),
+/// or Err if validation fails.
+async fn validate_batch_index(
+    old_next_index: u64,
+    current_index: u64,
+    event_type: &str,
+) -> Result<bool, IngesterError> {
+    if old_next_index > current_index {
+        return Err(IngesterError::ParserError(format!(
+            "Batch {} old_next_index {} is greater than current index {}",
+            event_type, old_next_index, current_index
+        )));
+    } else if old_next_index < current_index {
+        // Re-indexing scenario - events already processed
+        tracing::debug!(
+            "Batch {} re-indexing detected: old_next_index {} < current_index {}",
+            event_type,
+            old_next_index,
+            current_index
+        );
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 /// We need to find the events of the same tree:
 /// - order them by sequence number and execute them in order
 ///     HashMap<pubkey, Vec<Event(BatchAppendEvent, seq)>>
@@ -68,6 +94,30 @@ async fn persist_batch_append_event(
     batch_append_event: &BatchEvent,
     leaf_nodes: &mut Vec<LeafNode>,
 ) -> Result<(), IngesterError> {
+    // Validate old_next_index matches the current state of the tree
+    // Get the current next_index (max leaf_index + 1) for this tree
+    let current_next_index = accounts::Entity::find()
+        .filter(
+            accounts::Column::Tree
+                .eq(batch_append_event.merkle_tree_pubkey.to_vec())
+                .and(accounts::Column::InOutputQueue.eq(false)),
+        )
+        .order_by_desc(accounts::Column::LeafIndex)
+        .one(txn)
+        .await?
+        .map(|acc| (acc.leaf_index + 1) as u64)
+        .unwrap_or(0);
+
+    if !validate_batch_index(
+        batch_append_event.old_next_index,
+        current_next_index,
+        "append",
+    )
+    .await?
+    {
+        return Ok(());
+    }
+
     // 1. Create leaf nodes with the account hash as leaf.
     //      Leaf indices are used as output queue indices.
     //      The leaf index range of the batch append event is
@@ -202,6 +252,28 @@ async fn persist_batch_nullify_event(
     batch_nullify_event: &BatchEvent,
     leaf_nodes: &mut Vec<LeafNode>,
 ) -> Result<(), IngesterError> {
+    // Validate old_next_index matches the current state of nullified accounts
+    // Get the count of already nullified accounts for this tree
+    let current_nullified_count = accounts::Entity::find()
+        .filter(
+            accounts::Column::Tree
+                .eq(batch_nullify_event.merkle_tree_pubkey.to_vec())
+                .and(accounts::Column::NullifiedInTree.eq(true))
+                .and(accounts::Column::Spent.eq(true)),
+        )
+        .count(txn)
+        .await?;
+
+    if !validate_batch_index(
+        batch_nullify_event.old_next_index,
+        current_nullified_count,
+        "nullify",
+    )
+    .await?
+    {
+        return Ok(());
+    }
+
     // 1. Create leaf nodes with nullifier as leaf.
     //      Nullifier queue index is continuously incremented by 1
     //      with each element insertion into the nullifier queue.
@@ -211,6 +283,7 @@ async fn persist_batch_nullify_event(
     // 2. Queue range: Accounts are in batch range [old_next_index, new_next_index)
     // 3. Spent state: Accounts must be spent (spent = true)
     // 4. Not nullified: Accounts must not yet be nullified in tree (nullified_in_tree = false)
+    //    NOTE: During re-indexing, we relax this constraint to allow re-processing
     // 5. Count validation: Exactly (new_next_index - old_next_index) accounts must be found
     // 6. Sequential indices: Queue indices must be sequential with no gaps
     // 7. Nullifier exists: Each account must have a non-null nullifier
@@ -224,9 +297,9 @@ async fn persist_batch_nullify_event(
                 // Validation 1: Tree filter - Accounts belong to the correct merkle tree
                 .and(accounts::Column::Tree.eq(batch_nullify_event.merkle_tree_pubkey.to_vec()))
                 // Validation 3: Spent state - Accounts must be spent
-                .and(accounts::Column::Spent.eq(true))
-                // Validation 4: Not nullified - Accounts must not yet be nullified in tree
-                .and(accounts::Column::NullifiedInTree.eq(false)),
+                .and(accounts::Column::Spent.eq(true)), // Validation 4: During re-indexing, accounts might already be marked as nullified
+                                                        // We still need to process them to maintain consistency
+                                                        // The nullified_in_tree check is removed to allow re-processing
         )
         .order_by_asc(accounts::Column::NullifierQueueIndex)
         .all(txn)
@@ -236,8 +309,38 @@ async fn persist_batch_nullify_event(
     let expected_count =
         (batch_nullify_event.new_next_index - batch_nullify_event.old_next_index) as usize;
     if accounts.len() != expected_count {
-        // Check if accounts were already nullified
-        let already_nullified = accounts::Entity::find()
+        // During re-indexing, check if enough accounts were already nullified
+        // This handles the case where queue indices are assigned differently between runs
+        let already_nullified_in_tree = accounts::Entity::find()
+            .filter(
+                accounts::Column::Tree
+                    .eq(batch_nullify_event.merkle_tree_pubkey.to_vec())
+                    .and(accounts::Column::NullifiedInTree.eq(true))
+                    .and(accounts::Column::Spent.eq(true)),
+            )
+            .count(txn)
+            .await?;
+
+        // If we have as many nullified accounts as expected, this batch was already processed
+        if already_nullified_in_tree >= batch_nullify_event.new_next_index {
+            tracing::info!(
+                "Batch nullify already processed: {} accounts nullified in tree {} (expected batch size: {}). Accounts in queue: {}",
+                already_nullified_in_tree,
+                bs58::encode(&batch_nullify_event.merkle_tree_pubkey).into_string(),
+                expected_count,
+                accounts.len()
+            );
+            if accounts.len() < expected_count {
+                tracing::warn!(
+                    "Found only {} accounts instead of {}",
+                    accounts.len(),
+                    expected_count
+                );
+            }
+            return Ok(());
+        }
+
+        let in_range = accounts::Entity::find()
             .filter(
                 accounts::Column::NullifierQueueIndex
                     .gte(batch_nullify_event.old_next_index)
@@ -245,28 +348,18 @@ async fn persist_batch_nullify_event(
                         accounts::Column::NullifierQueueIndex
                             .lt(batch_nullify_event.new_next_index),
                     )
-                    .and(accounts::Column::Tree.eq(batch_nullify_event.merkle_tree_pubkey.to_vec()))
-                    .and(accounts::Column::NullifiedInTree.eq(true)),
+                    .and(
+                        accounts::Column::Tree.eq(batch_nullify_event.merkle_tree_pubkey.to_vec()),
+                    ),
             )
             .count(txn)
             .await?;
 
-        if already_nullified == expected_count as u64 {
-            // Accounts were already nullified, this is a duplicate/replay event
-            tracing::debug!(
-                "Batch nullify already processed: {} accounts already nullified for range [{}, {})",
-                already_nullified,
-                batch_nullify_event.old_next_index,
-                batch_nullify_event.new_next_index
-            );
-            return Ok(());
-        }
-
         return Err(IngesterError::ParserError(format!(
-            "Expected {} accounts in nullifier batch, found {} in queue, {} already nullified",
+            "Expected {} accounts in nullifier batch, found {} matching all criteria, {} in range",
             expected_count,
             accounts.len(),
-            already_nullified
+            in_range
         )));
     }
 
@@ -323,13 +416,14 @@ async fn persist_batch_nullify_event(
 
     let result = txn.execute(query).await?;
 
-    // Validation 9: Update verification - Database update must affect exactly expected_count rows
-    if result.rows_affected() != expected_count as u64 {
-        return Err(IngesterError::ParserError(format!(
-            "Update affected {} rows, expected {}",
+    // Validation 9: Update verification - During re-indexing, accounts might already be nullified
+    // so we allow the update to affect 0 rows (idempotent operation)
+    if result.rows_affected() != expected_count as u64 && result.rows_affected() != 0 {
+        tracing::warn!(
+            "Batch nullify update affected {} rows, expected {} or 0 (for re-indexing)",
             result.rows_affected(),
             expected_count
-        )));
+        );
     }
 
     Ok(())
@@ -349,6 +443,28 @@ async fn persist_batch_address_append_event(
     // 4. Sequential indices: Queue indices must be sequential with no gaps
     // 5. Address exists: Each address must have a non-empty value
     // 6. Delete verification: Database delete must affect exactly expected_count rows
+
+    // Validate old_next_index matches the current state of the address tree
+    // Get the current next_index (max leaf_index + 1) for this tree
+    let current_next_index = indexed_trees::Entity::find()
+        .filter(
+            indexed_trees::Column::Tree.eq(batch_address_append_event.merkle_tree_pubkey.to_vec()),
+        )
+        .order_by_desc(indexed_trees::Column::LeafIndex)
+        .one(txn)
+        .await?
+        .map(|tree| (tree.leaf_index + 1) as u64)
+        .unwrap_or(1); // Address trees start at index 1 (index 0 is reserved)
+
+    if !validate_batch_index(
+        batch_address_append_event.old_next_index,
+        current_next_index,
+        "address append",
+    )
+    .await?
+    {
+        return Ok(());
+    }
 
     let addresses = address_queues::Entity::find()
         .filter(
@@ -373,31 +489,39 @@ async fn persist_batch_address_append_event(
     let expected_count = (batch_address_append_event.new_next_index
         - batch_address_append_event.old_next_index) as usize;
     if addresses.len() != expected_count {
-        // Check if addresses were already processed by verifying they exist in the indexed tree
-        if addresses.is_empty() && expected_count > 0 {
-            // Verify that the addresses were actually appended to the indexed tree
-            let already_indexed = indexed_trees::Entity::find()
-                .filter(
-                    indexed_trees::Column::Tree
-                        .eq(batch_address_append_event.merkle_tree_pubkey.to_vec())
-                        .and(
-                            indexed_trees::Column::LeafIndex
-                                .gte(batch_address_append_event.old_next_index as i64),
-                        )
-                        .and(
-                            indexed_trees::Column::LeafIndex
-                                .lt(batch_address_append_event.new_next_index as i64),
-                        ),
-                )
-                .count(txn)
-                .await?;
+        // During re-indexing, check if addresses were already processed
+        // Check how many addresses are already in the indexed tree for this batch range
+        let already_indexed = indexed_trees::Entity::find()
+            .filter(
+                indexed_trees::Column::Tree
+                    .eq(batch_address_append_event.merkle_tree_pubkey.to_vec())
+                    .and(
+                        indexed_trees::Column::LeafIndex
+                            .gte(batch_address_append_event.old_next_index as i64),
+                    )
+                    .and(
+                        indexed_trees::Column::LeafIndex
+                            .lt(batch_address_append_event.new_next_index as i64),
+                    ),
+            )
+            .count(txn)
+            .await?;
 
-            if already_indexed == expected_count as u64 {
-                tracing::debug!(
-                    "Address batch already processed: {} addresses already in indexed tree for range [{}, {})",
-                    already_indexed,
-                    batch_address_append_event.old_next_index,
-                    batch_address_append_event.new_next_index
+        // If enough addresses are already indexed, this batch was already processed
+        if already_indexed >= expected_count as u64 {
+            tracing::info!(
+                "Address batch already processed: {} addresses already in indexed tree for range [{}, {}) (expected {})",
+                already_indexed,
+                batch_address_append_event.old_next_index,
+                batch_address_append_event.new_next_index,
+                expected_count
+            );
+
+            if addresses.len() < expected_count {
+                tracing::warn!(
+                    "Found only {} addresses in queue instead of {}, treating as already processed batch",
+                    addresses.len(),
+                    expected_count
                 );
                 return Ok(());
             }

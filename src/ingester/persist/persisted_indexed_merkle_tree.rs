@@ -330,32 +330,32 @@ pub async fn multi_append(
         })
         .collect();
 
-    let mut query = indexed_trees::Entity::insert_many(active_elements.clone())
+    let query = indexed_trees::Entity::insert_many(active_elements.clone())
         .on_conflict(
-            OnConflict::columns([
-                indexed_trees::Column::Tree,
-                indexed_trees::Column::LeafIndex,
-            ])
-            .update_columns([
-                indexed_trees::Column::Value,
-                indexed_trees::Column::NextIndex,
-                indexed_trees::Column::NextValue,
-                indexed_trees::Column::Seq,
-            ])
-            .to_owned(),
+            // Use ON CONFLICT DO NOTHING for idempotency
+            OnConflict::new().do_nothing().to_owned(),
         )
         .build(txn.get_database_backend());
 
-    query.sql = format!("{} WHERE excluded.seq >= indexed_trees.seq", query.sql);
-
     let result = txn.execute(query).await;
 
-    if let Err(e) = result {
-        log::error!("Failed to insert/update indexed tree elements: {}", e);
-        return Err(IngesterError::DatabaseError(format!(
-            "Failed to insert/update indexed tree elements: {}",
-            e
-        )));
+    match result {
+        Ok(res) => {
+            if res.rows_affected() < active_elements.len() as u64 {
+                log::info!(
+                    "Inserted {} of {} indexed tree elements ({})",
+                    res.rows_affected(),
+                    active_elements.len(),
+                    active_elements.len() as u64 - res.rows_affected()
+                );
+            }
+        }
+        Err(e) => {
+            return Err(IngesterError::DatabaseError(format!(
+                "Failed to insert indexed tree elements: {}",
+                e
+            )));
+        }
     }
 
     let leaf_nodes = elements_to_update

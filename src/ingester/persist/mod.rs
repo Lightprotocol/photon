@@ -101,6 +101,7 @@ pub async fn persist_state_update(
     }
 
     debug!("Persisting spent accounts...");
+
     for chunk in in_accounts
         .into_iter()
         .collect::<Vec<_>>()

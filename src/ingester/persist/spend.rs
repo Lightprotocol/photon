@@ -75,6 +75,7 @@ pub async fn spend_input_accounts_batched(
     if accounts.is_empty() {
         return Ok(());
     }
+
     for account in accounts {
         accounts::Entity::update_many()
             .filter(accounts::Column::Hash.eq(account.account_hash.to_vec()))
@@ -93,5 +94,6 @@ pub async fn spend_input_accounts_batched(
             .exec(txn)
             .await?;
     }
+
     Ok(())
 }

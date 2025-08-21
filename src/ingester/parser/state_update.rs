@@ -142,9 +142,31 @@ impl StateUpdate {
             merged
                 .batch_new_addresses
                 .extend(update.batch_new_addresses);
-            merged
-                .batch_nullify_context
-                .extend(update.batch_nullify_context);
+            // When merging batch_nullify_context, we need to handle duplicates
+            // Keep the FIRST occurrence of each account (by account_hash) to maintain consistency
+            let before_count = merged.batch_nullify_context.len();
+            let new_count = update.batch_nullify_context.len();
+            let mut duplicates = 0;
+
+            for ctx in update.batch_nullify_context {
+                if !merged
+                    .batch_nullify_context
+                    .iter()
+                    .any(|existing| existing.account_hash == ctx.account_hash)
+                {
+                    merged.batch_nullify_context.push(ctx);
+                } else {
+                    duplicates += 1;
+                }
+            }
+
+            let after_count = merged.batch_nullify_context.len();
+            if duplicates > 0 {
+                tracing::debug!(
+                    "merge_updates: batch_nullify_context before={}, new={}, duplicates={}, after={}",
+                    before_count, new_count, duplicates, after_count
+                );
+            }
         }
 
         merged
