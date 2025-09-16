@@ -1,3 +1,4 @@
+use crate::ingester::parser::state_update::SequenceGap;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -14,10 +15,28 @@ pub enum IngesterError {
     EmptyBatchEvent,
     #[error("Invalid event.")]
     InvalidEvent,
+    #[error("Sequence gap detected: {} gaps found", .0.len())]
+    SequenceGapDetected(Vec<SequenceGap>),
 }
 
 impl From<sea_orm::error::DbErr> for IngesterError {
     fn from(err: sea_orm::error::DbErr) -> Self {
         IngesterError::DatabaseError(format!("DatabaseError: {}", err))
+    }
+}
+
+impl From<String> for IngesterError {
+    fn from(err: String) -> Self {
+        IngesterError::ParserError(err)
+    }
+}
+
+impl From<crate::ingester::parser::state_update::SequenceGapError> for IngesterError {
+    fn from(err: crate::ingester::parser::state_update::SequenceGapError) -> Self {
+        match err {
+            crate::ingester::parser::state_update::SequenceGapError::GapDetected(gaps) => {
+                IngesterError::SequenceGapDetected(gaps)
+            }
+        }
     }
 }
