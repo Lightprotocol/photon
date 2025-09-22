@@ -72,7 +72,6 @@ impl AccountWithContext {
         } = compressed_account;
 
         let data = data.map(|d| {
-            // TODO: check if v2 token account needs it differently.
             let discriminator_u64 = LittleEndian::read_u64(&d.discriminator);
             AccountData {
                 discriminator: UnsignedInteger(discriminator_u64),

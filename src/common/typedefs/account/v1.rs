@@ -79,7 +79,6 @@ mod tests {
 
     #[test]
     fn test_discriminator_serializes_as_string() {
-        // Test the discriminator value from the original precision loss issue
         let bytes = [247u8, 237, 227, 245, 215, 195, 222, 70];
         let expected_u64 = u64::from_le_bytes(bytes);
 
@@ -89,17 +88,15 @@ mod tests {
             data_hash: Hash::default(),
         };
 
-        // Serialize to JSON
         let json = serde_json::to_string(&account_data).unwrap();
 
-        // Verify discriminator is serialized as a string, not a number
         assert!(
             json.contains(&format!("\"discriminator\":\"{}\"", expected_u64)),
             "Discriminator should be serialized as string, got: {}",
             json
         );
 
-        // Verify it doesn't contain the number format
+
         assert!(
             !json.contains(&format!("\"discriminator\":{}", expected_u64)),
             "Discriminator should not be serialized as number, got: {}",
@@ -109,7 +106,6 @@ mod tests {
 
     #[test]
     fn test_discriminator_prevents_javascript_precision_loss() {
-        // Test with a value that exceeds JavaScript's MAX_SAFE_INTEGER
         let large_discriminator = 9007199254740992u64; // MAX_SAFE_INTEGER + 1
 
         let account_data = AccountData {
@@ -120,7 +116,6 @@ mod tests {
 
         let json = serde_json::to_string(&account_data).unwrap();
 
-        // Should be serialized as string
         assert!(
             json.contains(&format!("\"discriminator\":\"{}\"", large_discriminator)),
             "Large discriminator should be serialized as string to prevent JS precision loss, got: {}",
@@ -130,7 +125,6 @@ mod tests {
 
     #[test]
     fn test_discriminator_with_max_u64() {
-        // Test with u64::MAX
         let max_discriminator = u64::MAX;
 
         let account_data = AccountData {
@@ -141,7 +135,6 @@ mod tests {
 
         let json = serde_json::to_string(&account_data).unwrap();
 
-        // Should be serialized as string
         assert!(
             json.contains(&format!("\"discriminator\":\"{}\"", max_discriminator)),
             "MAX u64 discriminator should be serialized as string, got: {}",
@@ -151,7 +144,6 @@ mod tests {
 
     #[test]
     fn test_discriminator_zero_value() {
-        // Test with zero value
         let account_data = AccountData {
             discriminator: UnsignedInteger(0),
             data: Base64String(vec![]),
@@ -160,7 +152,6 @@ mod tests {
 
         let json = serde_json::to_string(&account_data).unwrap();
 
-        // Should be serialized as string "0"
         assert!(
             json.contains("\"discriminator\":\"0\""),
             "Zero discriminator should be serialized as string, got: {}",
@@ -170,13 +161,12 @@ mod tests {
 
     #[test]
     fn test_lamports_serializes_as_string() {
-        // Test that lamports field is serialized as string
         let account = Account {
             hash: Hash::default(),
             address: None,
             data: None,
             owner: SerializablePubkey::default(),
-            lamports: UnsignedInteger(1000000000), // 1 SOL
+            lamports: UnsignedInteger(1000000000),
             tree: SerializablePubkey::default(),
             leaf_index: UnsignedInteger(0),
             seq: Some(UnsignedInteger(1)),
@@ -185,7 +175,6 @@ mod tests {
 
         let json = serde_json::to_string(&account).unwrap();
 
-        // Verify lamports is serialized as string
         assert!(
             json.contains("\"lamports\":\"1000000000\""),
             "Lamports should be serialized as string, got: {}",
@@ -195,7 +184,6 @@ mod tests {
 
     #[test]
     fn test_lamports_prevents_javascript_precision_loss() {
-        // Test with a value that exceeds JavaScript's MAX_SAFE_INTEGER
         let large_lamports = 9007199254740992u64; // MAX_SAFE_INTEGER + 1
 
         let account = Account {
@@ -212,7 +200,6 @@ mod tests {
 
         let json = serde_json::to_string(&account).unwrap();
 
-        // Should be serialized as string
         assert!(
             json.contains(&format!("\"lamports\":\"{}\"", large_lamports)),
             "Large lamports should be serialized as string to prevent JS precision loss, got: {}",
