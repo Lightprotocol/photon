@@ -78,7 +78,7 @@ impl anchor_lang::AnchorDeserialize for UnsignedInteger {
     }
 
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> Result<Self, std::io::Error> {
-        let mut buffer = [0u8; 8]; // Adjusting the size for u64
+        let mut buffer = [0u8; 8];
         reader.read_exact(&mut buffer)?;
         let value = u64::from_le_bytes(buffer);
         Ok(UnsignedInteger(value))
@@ -91,7 +91,7 @@ impl anchor_lang::AnchorSerialize for UnsignedInteger {
     }
 }
 
-/// Serialize u64 as string to prevent precision loss using SQLite.
+/// Serialize u64 as string to prevent precision loss if using SQLite.
 pub fn serialize_u64_as_string<S>(
     u64_value: &UnsignedInteger,
     serializer: S,

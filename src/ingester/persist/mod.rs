@@ -251,11 +251,11 @@ pub fn parse_token_data(account: &Account) -> Result<Option<TokenData>, Ingester
             let is_sha_flat_token = data.discriminator.0.to_le_bytes() == [0, 0, 0, 0, 0, 0, 0, 4]; // V3 discriminator
 
             // TODO: remove after debugging.
-            println!("ingested data.discriminator: {:?}", data.discriminator);
-            println!("is_v1_token: {:?}", is_v1_token);
-            println!("is_v2_token: {:?}", is_v2_token);
-            println!("is_sha_flat_token: {:?}", is_sha_flat_token);
-            println!("account.owner.0: {:?}", account.owner.0);
+            // println!("ingested data.discriminator: {:?}", data.discriminator);
+            // println!("is_v1_token: {:?}", is_v1_token);
+            // println!("is_v2_token: {:?}", is_v2_token);
+            // println!("is_sha_flat_token: {:?}", is_sha_flat_token);
+            // println!("account.owner.0: {:?}", account.owner.0);
             if account.owner.0 == COMPRESSED_TOKEN_PROGRAM && (is_v1_token) {}
             if account.owner.0 == COMPRESSED_TOKEN_PROGRAM && (is_v1_token || is_v2_token || is_sha_flat_token) {
                 let data_slice = data.data.0.as_slice();
@@ -264,11 +264,12 @@ pub fn parse_token_data(account: &Account) -> Result<Option<TokenData>, Ingester
                 })?;
                 Ok(Some(token_data))
             } else {
+                // TODO: remove after debugging.
                 if account.owner.0 == COMPRESSED_TOKEN_PROGRAM {
-                    println!("Must be mint account. address: {:?}", account.address);
+                    // println!("Must be mint account. address: {:?}", account.address);
                 }
                 else {
-                    println!("Not mint account. address: {:?}", account.address);
+                    // println!("Not mint account. address: {:?}", account.address);
                 }
                 Ok(None)
             }
@@ -380,12 +381,12 @@ async fn execute_account_update_query_and_update_balances(
         .filter(|(_, value)| *value != Decimal::from(0))
         .map(|(key, value)| {
             if db_backend == DatabaseBackend::Sqlite {
-                // For SQLite, store as TEXT
+                // Store as text
                 let value_i64: i64 = value.try_into().unwrap_or(0);
                 let value_u64 = value_i64.unsigned_abs();
                 format!("({}, '{}')", key, value_u64)
             } else {
-                // For PostgreSQL, use numeric value
+                // PostgreSQL
                 format!("({}, {})", key, value)
             }
         })
@@ -401,7 +402,6 @@ async fn execute_account_update_query_and_update_balances(
                 DO UPDATE SET {balance_column} = CAST(CAST({owner_table_name}.{balance_column} AS INTEGER) + CAST(excluded.{balance_column} AS INTEGER) AS TEXT)",
             )
         } else {
-            // PostgreSQL still uses numeric types
             format!(
                 "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
                 VALUES {values_string} ON CONFLICT (owner{additional_columns})

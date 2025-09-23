@@ -57,11 +57,10 @@ mod tests {
 
     #[test]
     fn test_token_amount_serializes_as_string() {
-        // Test that amount field is serialized as string
         let token_data = TokenData {
             mint: SerializablePubkey::default(),
             owner: SerializablePubkey::default(),
-            amount: UnsignedInteger(1000000000), // 1 token with 9 decimals
+            amount: UnsignedInteger(1000000000),
             delegate: None,
             state: AccountState::initialized,
             tlv: None,
@@ -69,7 +68,6 @@ mod tests {
 
         let json = serde_json::to_string(&token_data).unwrap();
 
-        // Verify amount is serialized as string
         assert!(
             json.contains("\"amount\":\"1000000000\""),
             "Amount should be serialized as string, got: {}",
@@ -79,8 +77,7 @@ mod tests {
 
     #[test]
     fn test_token_amount_prevents_javascript_precision_loss() {
-        // Test with a value that exceeds JavaScript's MAX_SAFE_INTEGER
-        let large_amount = u64::MAX; // Maximum u64 value
+        let large_amount = u64::MAX;
 
         let token_data = TokenData {
             mint: SerializablePubkey::default(),
@@ -93,7 +90,6 @@ mod tests {
 
         let json = serde_json::to_string(&token_data).unwrap();
 
-        // Should be serialized as string
         assert!(
             json.contains(&format!("\"amount\":\"{}\"", large_amount)),
             "Large amount should be serialized as string to prevent JS precision loss, got: {}",
@@ -103,7 +99,6 @@ mod tests {
 
     #[test]
     fn test_token_amount_zero_value() {
-        // Test with zero value
         let token_data = TokenData {
             mint: SerializablePubkey::default(),
             owner: SerializablePubkey::default(),
@@ -115,7 +110,6 @@ mod tests {
 
         let json = serde_json::to_string(&token_data).unwrap();
 
-        // Should be serialized as string "0"
         assert!(
             json.contains("\"amount\":\"0\""),
             "Zero amount should be serialized as string, got: {}",

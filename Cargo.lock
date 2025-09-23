@@ -105,6 +105,7 @@ checksum = "250f629c0161ad8107cf89319e990051fae62832fd343083bea452d93e2205fd"
 [[package]]
 name = "aligned-sized"
 version = "1.1.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3679,6 +3680,7 @@ dependencies = [
 [[package]]
 name = "light-account-checks"
 version = "0.3.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "solana-account-info",
  "solana-msg",
@@ -3691,13 +3693,14 @@ dependencies = [
 [[package]]
 name = "light-batched-merkle-tree"
 version = "0.3.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "aligned-sized",
  "borsh 0.10.4",
  "light-account-checks",
  "light-bloom-filter",
  "light-compressed-account",
- "light-hasher 3.1.0",
+ "light-hasher 3.1.0 (git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db)",
  "light-macros",
  "light-merkle-tree-metadata",
  "light-verifier",
@@ -3714,6 +3717,7 @@ dependencies = [
 [[package]]
 name = "light-bloom-filter"
 version = "0.3.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "bitvec",
  "num-bigint 0.4.6",
@@ -3737,11 +3741,12 @@ dependencies = [
 [[package]]
 name = "light-compressed-account"
 version = "0.3.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "anchor-lang 0.31.1",
  "borsh 0.10.4",
  "bytemuck",
- "light-hasher 3.1.0",
+ "light-hasher 3.1.0 (git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db)",
  "light-macros",
  "light-profiler",
  "light-zero-copy",
@@ -3769,24 +3774,6 @@ dependencies = [
 [[package]]
 name = "light-hasher"
 version = "3.1.0"
-dependencies = [
- "ark-bn254 0.5.0",
- "ark-ff 0.5.0",
- "arrayvec",
- "borsh 0.10.4",
- "light-poseidon 0.3.0",
- "num-bigint 0.4.6",
- "sha2 0.10.9",
- "sha3 0.10.8",
- "solana-nostd-keccak",
- "solana-program-error",
- "solana-pubkey",
- "thiserror 2.0.12",
-]
-
-[[package]]
-name = "light-hasher"
-version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6445937ea244bebae0558e2aaec375791895d08c785b87cc45b62cd80d69139"
 dependencies = [
@@ -3799,6 +3786,25 @@ dependencies = [
  "sha2 0.10.9",
  "sha3 0.10.8",
  "solana-nostd-keccak",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "light-hasher"
+version = "3.1.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
+dependencies = [
+ "ark-bn254 0.5.0",
+ "ark-ff 0.5.0",
+ "arrayvec",
+ "borsh 0.10.4",
+ "light-poseidon 0.3.0",
+ "num-bigint 0.4.6",
+ "sha2 0.10.9",
+ "sha3 0.10.8",
+ "solana-nostd-keccak",
+ "solana-program-error",
+ "solana-pubkey",
  "thiserror 2.0.12",
 ]
 
@@ -3817,6 +3823,7 @@ dependencies = [
 [[package]]
 name = "light-macros"
 version = "2.1.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "bs58 0.5.1",
  "proc-macro2",
@@ -3827,6 +3834,7 @@ dependencies = [
 [[package]]
 name = "light-merkle-tree-metadata"
 version = "0.3.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "borsh 0.10.4",
  "bytemuck",
@@ -3878,6 +3886,7 @@ dependencies = [
 [[package]]
 name = "light-profiler"
 version = "0.1.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3887,6 +3896,7 @@ dependencies = [
 [[package]]
 name = "light-verifier"
 version = "2.1.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "groth16-solana",
  "light-compressed-account",
@@ -3896,6 +3906,7 @@ dependencies = [
 [[package]]
 name = "light-zero-copy"
 version = "0.2.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "arrayvec",
  "light-zero-copy-derive",
@@ -3906,6 +3917,7 @@ dependencies = [
 [[package]]
 name = "light-zero-copy-derive"
 version = "0.1.0"
+source = "git+https://github.com/lightprotocol/light-protocol?rev=e3f0863db#e3f0863db7c85920a67b312f21e13bfd2b1d99b4"
 dependencies = [
  "lazy_static",
  "proc-macro2",
