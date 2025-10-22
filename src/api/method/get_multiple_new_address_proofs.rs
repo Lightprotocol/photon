@@ -1,7 +1,6 @@
 use light_compressed_account::TreeType;
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, Statement,
-    TransactionTrait,
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, Statement, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use solana_pubkey::{pubkey, Pubkey};
