@@ -15,3 +15,5 @@ test.db
 docker-compose.yml
 
 proto/**/*.bin
+.cursor
+**/photon.log
