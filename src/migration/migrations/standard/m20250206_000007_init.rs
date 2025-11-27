@@ -39,8 +39,8 @@ impl MigrationTrait for Migration {
                     slot_created BIGINT NOT NULL,
                     spent BOOLEAN NOT NULL,
                     prev_spent BOOLEAN,
-                    lamports REAL,
-                    discriminator REAL,
+                    lamports TEXT,
+                    discriminator TEXT,
                     in_output_queue BOOLEAN NOT NULL DEFAULT TRUE,
                     nullifier BLOB,
                     tx_hash BLOB,
@@ -241,8 +241,8 @@ impl MigrationTrait for Migration {
                     slot_created BIGINT NOT NULL,
                     spent BOOLEAN NOT NULL,
                     prev_spent BOOLEAN,
-                    lamports REAL,
-                    discriminator REAL
+                    lamports TEXT,
+                    discriminator TEXT
                 );
 
                 INSERT INTO accounts_new

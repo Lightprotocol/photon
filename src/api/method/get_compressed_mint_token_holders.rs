@@ -11,7 +11,10 @@ use crate::common::typedefs::unsigned_integer::UnsignedInteger;
 use crate::dao::generated::token_owner_balances;
 
 use super::super::error::PhotonApiError;
-use super::utils::{parse_decimal, PAGE_LIMIT};
+use super::utils::{
+    is_sqlite, parse_balance_string, parse_decimal, OwnerBalanceModel, OwnerBalanceModelString,
+    PAGE_LIMIT,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct OwnerBalance {
@@ -78,21 +81,47 @@ pub async fn get_compressed_mint_token_holders(
     }
     let limit = limit.map(|l| l.value()).unwrap_or(PAGE_LIMIT);
 
-    let items = token_owner_balances::Entity::find()
-        .filter(filter)
-        .order_by_desc(token_owner_balances::Column::Amount)
-        .order_by_desc(token_owner_balances::Column::Owner)
-        .limit(limit)
-        .all(conn)
-        .await?
-        .drain(..)
-        .map(|token_owner_balance| {
-            Ok(OwnerBalance {
-                owner: token_owner_balance.owner.try_into()?,
-                balance: UnsignedInteger(parse_decimal(token_owner_balance.amount)?),
+    let items = if is_sqlite(conn) {
+        token_owner_balances::Entity::find()
+            .select_only()
+            .column(token_owner_balances::Column::Owner)
+            .column(token_owner_balances::Column::Amount)
+            .filter(filter)
+            .order_by_desc(token_owner_balances::Column::Amount)
+            .order_by_desc(token_owner_balances::Column::Owner)
+            .limit(limit)
+            .into_model::<OwnerBalanceModelString>()
+            .all(conn)
+            .await?
+            .drain(..)
+            .map(|m| {
+                Ok(OwnerBalance {
+                    owner: m.owner.try_into()?,
+                    balance: UnsignedInteger(parse_balance_string(&m.amount)?),
+                })
             })
-        })
-        .collect::<Result<Vec<OwnerBalance>, PhotonApiError>>()?;
+            .collect::<Result<Vec<OwnerBalance>, PhotonApiError>>()?
+    } else {
+        token_owner_balances::Entity::find()
+            .select_only()
+            .column(token_owner_balances::Column::Owner)
+            .column(token_owner_balances::Column::Amount)
+            .filter(filter)
+            .order_by_desc(token_owner_balances::Column::Amount)
+            .order_by_desc(token_owner_balances::Column::Owner)
+            .limit(limit)
+            .into_model::<OwnerBalanceModel>()
+            .all(conn)
+            .await?
+            .drain(..)
+            .map(|m| {
+                Ok(OwnerBalance {
+                    owner: m.owner.try_into()?,
+                    balance: UnsignedInteger(parse_decimal(m.amount)?),
+                })
+            })
+            .collect::<Result<Vec<OwnerBalance>, PhotonApiError>>()?
+    };
 
     let mut cursor = items.last().map(|item| {
         Base58String({
