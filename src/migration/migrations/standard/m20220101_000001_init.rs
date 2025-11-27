@@ -275,30 +275,30 @@ impl MigrationTrait for Migration {
                 .await?;
             }
             DatabaseBackend::Sqlite => {
-                // HACK: SQLx Decimal is not compatible with INTEGER so we use REAL instead.
-                execute_sql(manager, "ALTER TABLE accounts ADD COLUMN lamports REAL;").await?;
+                // Use TEXT for large integers to preserve precision (f64/REAL loses precision beyond 2^53)
+                execute_sql(manager, "ALTER TABLE accounts ADD COLUMN lamports TEXT;").await?;
 
                 execute_sql(
                     manager,
-                    "ALTER TABLE accounts ADD COLUMN discriminator REAL;",
+                    "ALTER TABLE accounts ADD COLUMN discriminator TEXT;",
                 )
                 .await?;
 
                 execute_sql(
                     manager,
-                    "ALTER TABLE token_accounts ADD COLUMN amount REAL;",
+                    "ALTER TABLE token_accounts ADD COLUMN amount TEXT;",
                 )
                 .await?;
 
                 execute_sql(
                     manager,
-                    "ALTER TABLE owner_balances ADD COLUMN lamports REAL;",
+                    "ALTER TABLE owner_balances ADD COLUMN lamports TEXT;",
                 )
                 .await?;
 
                 execute_sql(
                     manager,
-                    "ALTER TABLE token_owner_balances ADD COLUMN amount REAL;",
+                    "ALTER TABLE token_owner_balances ADD COLUMN amount TEXT;",
                 )
                 .await?;
             }

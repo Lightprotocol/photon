@@ -10,8 +10,8 @@ use crate::dao::generated::{accounts, token_accounts};
 use byteorder::{ByteOrder, LittleEndian};
 use sea_orm::sea_query::SimpleExpr;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
-    QueryOrder, QuerySelect, Statement, Value,
+    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait,
+    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Statement, Value,
 };
 use serde::{Deserialize, Serialize};
 use solana_signature::Signature;
@@ -33,6 +33,18 @@ pub fn parse_decimal(value: Decimal) -> Result<u64, PhotonApiError> {
         .to_string()
         .parse::<u64>()
         .map_err(|_| PhotonApiError::UnexpectedError("Invalid decimal value".to_string()))
+}
+
+pub fn parse_balance_string(value: &str) -> Result<u64, PhotonApiError> {
+    // Handle potential decimal point from Decimal serialization
+    let value = value.split('.').next().unwrap_or(value);
+    value
+        .parse::<u64>()
+        .map_err(|_| PhotonApiError::UnexpectedError(format!("Invalid balance: {}", value)))
+}
+
+pub fn is_sqlite(conn: &DatabaseConnection) -> bool {
+    conn.get_database_backend() == DatabaseBackend::Sqlite
 }
 
 pub(crate) fn parse_leaf_index(leaf_index: i64) -> Result<u64, PhotonApiError> {
@@ -317,6 +329,17 @@ pub struct BalanceModel {
 #[derive(FromQueryResult)]
 pub struct LamportModel {
     pub lamports: Decimal,
+}
+
+// SQLite-specific models that read TEXT columns as String
+#[derive(FromQueryResult)]
+pub struct BalanceModelString {
+    pub amount: String,
+}
+
+#[derive(FromQueryResult)]
+pub struct LamportModelString {
+    pub lamports: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]

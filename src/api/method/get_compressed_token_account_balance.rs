@@ -4,10 +4,11 @@ use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 
 use super::super::error::PhotonApiError;
-use super::utils::{parse_decimal, AccountDataTable};
-use super::utils::{BalanceModel, CompressedAccountRequest};
+use super::utils::{
+    is_sqlite, parse_balance_string, parse_decimal, AccountDataTable, BalanceModel,
+    BalanceModelString, CompressedAccountRequest,
+};
 use crate::common::typedefs::context::Context;
-use sqlx::types::Decimal;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -32,19 +33,34 @@ pub async fn get_compressed_token_account_balance(
 ) -> Result<GetCompressedTokenAccountBalanceResponse, PhotonApiError> {
     let context = Context::extract(conn).await?;
     let id = request.parse_id()?;
-    let balance = token_accounts::Entity::find()
-        .select_only()
-        .column(token_accounts::Column::Amount)
-        .filter(id.filter(AccountDataTable::TokenAccounts))
-        .into_model::<BalanceModel>()
-        .one(conn)
-        .await?
-        .map(|x| x.amount)
-        .unwrap_or(Decimal::from(0));
+
+    let balance = if is_sqlite(conn) {
+        token_accounts::Entity::find()
+            .select_only()
+            .column(token_accounts::Column::Amount)
+            .filter(id.filter(AccountDataTable::TokenAccounts))
+            .into_model::<BalanceModelString>()
+            .one(conn)
+            .await?
+            .map(|x| parse_balance_string(&x.amount))
+            .transpose()?
+            .unwrap_or(0)
+    } else {
+        token_accounts::Entity::find()
+            .select_only()
+            .column(token_accounts::Column::Amount)
+            .filter(id.filter(AccountDataTable::TokenAccounts))
+            .into_model::<BalanceModel>()
+            .one(conn)
+            .await?
+            .map(|x| parse_decimal(x.amount))
+            .transpose()?
+            .unwrap_or(0)
+    };
 
     Ok(GetCompressedTokenAccountBalanceResponse {
         value: TokenAccountBalance {
-            amount: UnsignedInteger(parse_decimal(balance)?),
+            amount: UnsignedInteger(balance),
         },
         context,
     })

@@ -313,6 +313,32 @@ fn bytes_to_sqlite_sql_format(bytes: Vec<u8>) -> String {
     format!("X'{}'", hex_string) // Properly formatted for SQLite BLOB
 }
 
+fn option_bytes_to_sqlite(bytes: Option<Vec<u8>>) -> String {
+    match bytes {
+        Some(b) => bytes_to_sqlite_sql_format(b),
+        None => "NULL".to_string(),
+    }
+}
+
+fn option_i64_to_sql(val: Option<i64>) -> String {
+    match val {
+        Some(v) => v.to_string(),
+        None => "NULL".to_string(),
+    }
+}
+
+fn option_i32_to_sql(val: Option<i32>) -> String {
+    match val {
+        Some(v) => v.to_string(),
+        None => "NULL".to_string(),
+    }
+}
+
+fn bool_to_sqlite(val: bool) -> &'static str {
+    if val { "1" } else { "0" }
+}
+
+
 async fn execute_account_update_query_and_update_balances(
     txn: &DatabaseTransaction,
     mut query: Statement,
@@ -344,11 +370,12 @@ async fn execute_account_update_query_and_update_balances(
         let prev_spent: Option<bool> = row.try_get("", "prev_spent")?;
         match (prev_spent, &modification_type) {
             (_, ModificationType::Append) | (Some(false), ModificationType::Spend) => {
-                let mut amount_of_interest = match db_backend {
+                let mut amount_of_interest: Decimal = match db_backend {
                     DatabaseBackend::Postgres => row.try_get("", balance_column)?,
                     DatabaseBackend::Sqlite => {
-                        let amount: i64 = row.try_get("", balance_column)?;
-                        Decimal::from(amount)
+                        // SQLite stores as TEXT to preserve precision
+                        let amount_str: String = row.try_get("", balance_column)?;
+                        amount_str.parse().unwrap_or(Decimal::ZERO)
                     }
                     _ => panic!("Unsupported database backend"),
                 };
@@ -375,16 +402,32 @@ async fn execute_account_update_query_and_update_balances(
     let values = balance_modifications
         .into_iter()
         .filter(|(_, value)| *value != Decimal::from(0))
-        .map(|(key, value)| format!("({}, {})", key, value))
+        .map(|(key, value)| {
+            if db_backend == DatabaseBackend::Sqlite {
+                // SQLite TEXT columns need quoted string values
+                format!("({}, '{}')", key, value)
+            } else {
+                format!("({}, {})", key, value)
+            }
+        })
         .collect::<Vec<String>>();
 
     if !values.is_empty() {
         let values_string = values.join(", ");
-        let raw_sql = format!(
-            "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
-            VALUES {values_string} ON CONFLICT (owner{additional_columns})
-            DO UPDATE SET {balance_column} = {owner_table_name}.{balance_column} + excluded.{balance_column}",
-        );
+        let raw_sql = if db_backend == DatabaseBackend::Sqlite {
+            // SQLite: CAST TEXT to INTEGER for arithmetic, back to TEXT for storage
+            format!(
+                "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
+                VALUES {values_string} ON CONFLICT (owner{additional_columns})
+                DO UPDATE SET {balance_column} = CAST(CAST({owner_table_name}.{balance_column} AS INTEGER) + CAST(excluded.{balance_column} AS INTEGER) AS TEXT)",
+            )
+        } else {
+            format!(
+                "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
+                VALUES {values_string} ON CONFLICT (owner{additional_columns})
+                DO UPDATE SET {balance_column} = {owner_table_name}.{balance_column} + excluded.{balance_column}",
+            )
+        };
         txn.execute(Statement::from_string(db_backend, raw_sql))
             .await?;
     }
@@ -422,37 +465,10 @@ async fn append_output_accounts(
     txn: &DatabaseTransaction,
     out_accounts: &[AccountWithContext],
 ) -> Result<(), IngesterError> {
-    let mut account_models = Vec::new();
+    let db_backend = txn.get_database_backend();
     let mut token_accounts = Vec::new();
 
     for account in out_accounts {
-        account_models.push(accounts::ActiveModel {
-            hash: Set(account.account.hash.to_vec()),
-            address: Set(account.account.address.map(|x| x.to_bytes_vec())),
-            discriminator: Set(account
-                .account
-                .data
-                .as_ref()
-                .map(|x| Decimal::from(x.discriminator.0))),
-            data: Set(account.account.data.as_ref().map(|x| x.data.clone().0)),
-            data_hash: Set(account.account.data.as_ref().map(|x| x.data_hash.to_vec())),
-            tree: Set(account.account.tree.to_bytes_vec()),
-            queue: Set(Some(account.context.queue.to_bytes_vec())),
-            leaf_index: Set(account.account.leaf_index.0 as i64),
-            in_output_queue: Set(account.context.in_output_queue),
-            nullifier_queue_index: Set(account.context.nullifier_queue_index.map(|x| x.0 as i64)),
-            nullified_in_tree: Set(false),
-            tree_type: Set(Some(account.context.tree_type as i32)),
-            nullifier: Set(account.context.nullifier.as_ref().map(|x| x.to_vec())),
-            owner: Set(account.account.owner.to_bytes_vec()),
-            lamports: Set(Decimal::from(account.account.lamports.0)),
-            spent: Set(false),
-            slot_created: Set(account.account.slot_created.0 as i64),
-            seq: Set(account.account.seq.map(|x| x.0 as i64)),
-            prev_spent: Set(None),
-            tx_hash: Default::default(), // tx hashes are only set when an account is an input
-        });
-
         if let Some(token_data) = account.account.parse_token_data()? {
             token_accounts.push(EnrichedTokenAccount {
                 token_data,
@@ -462,13 +478,81 @@ async fn append_output_accounts(
     }
 
     if !out_accounts.is_empty() {
-        let query = accounts::Entity::insert_many(account_models)
-            .on_conflict(
-                OnConflict::column(accounts::Column::Hash)
-                    .do_nothing()
-                    .to_owned(),
-            )
-            .build(txn.get_database_backend());
+        let query = if db_backend == DatabaseBackend::Sqlite {
+            // SQLite: Use raw SQL with string values to preserve precision
+            let values: Vec<String> = out_accounts
+                .iter()
+                .map(|account| {
+                    let hash = bytes_to_sqlite_sql_format(account.account.hash.to_vec());
+                    let data = option_bytes_to_sqlite(account.account.data.as_ref().map(|x| x.data.clone().0));
+                    let data_hash = option_bytes_to_sqlite(account.account.data.as_ref().map(|x| x.data_hash.to_vec()));
+                    let address = option_bytes_to_sqlite(account.account.address.map(|x| x.to_bytes_vec()));
+                    let owner = bytes_to_sqlite_sql_format(account.account.owner.to_bytes_vec());
+                    let tree = bytes_to_sqlite_sql_format(account.account.tree.to_bytes_vec());
+                    let leaf_index = account.account.leaf_index.0 as i64;
+                    let seq = option_i64_to_sql(account.account.seq.map(|x| x.0 as i64));
+                    let slot_created = account.account.slot_created.0 as i64;
+                    let spent = bool_to_sqlite(false);
+                    let prev_spent = "NULL";
+                    // Store lamports and discriminator as TEXT strings to preserve precision
+                    let lamports = format!("'{}'", account.account.lamports.0);
+                    let discriminator = match account.account.data.as_ref() {
+                        Some(d) => format!("'{}'", d.discriminator.0),
+                        None => "NULL".to_string(),
+                    };
+                    let tree_type = option_i32_to_sql(Some(account.context.tree_type as i32));
+                    let nullified_in_tree = bool_to_sqlite(false);
+                    let nullifier_queue_index = option_i64_to_sql(account.context.nullifier_queue_index.map(|x| x.0 as i64));
+                    let in_output_queue = bool_to_sqlite(account.context.in_output_queue);
+                    let queue = option_bytes_to_sqlite(Some(account.context.queue.to_bytes_vec()));
+                    let nullifier = option_bytes_to_sqlite(account.context.nullifier.as_ref().map(|x| x.to_vec()));
+                    let tx_hash = "NULL";
+
+                    format!(
+                        "({hash}, {data}, {data_hash}, {address}, {owner}, {tree}, {leaf_index}, {seq}, {slot_created}, {spent}, {prev_spent}, {lamports}, {discriminator}, {tree_type}, {nullified_in_tree}, {nullifier_queue_index}, {in_output_queue}, {queue}, {nullifier}, {tx_hash})"
+                    )
+                })
+                .collect();
+            let values_string = values.join(", ");
+            let sql = format!(
+                "INSERT INTO accounts (hash, data, data_hash, address, owner, tree, leaf_index, seq, slot_created, spent, prev_spent, lamports, discriminator, tree_type, nullified_in_tree, nullifier_queue_index, in_output_queue, queue, nullifier, tx_hash) VALUES {values_string} ON CONFLICT (hash) DO NOTHING"
+            );
+            Statement::from_string(db_backend, sql)
+        } else {
+            // PostgreSQL: Use SeaORM models
+            let account_models: Vec<accounts::ActiveModel> = out_accounts
+                .iter()
+                .map(|account| accounts::ActiveModel {
+                    hash: Set(account.account.hash.to_vec()),
+                    address: Set(account.account.address.map(|x| x.to_bytes_vec())),
+                    discriminator: Set(account.account.data.as_ref().map(|x| Decimal::from(x.discriminator.0))),
+                    data: Set(account.account.data.as_ref().map(|x| x.data.clone().0)),
+                    data_hash: Set(account.account.data.as_ref().map(|x| x.data_hash.to_vec())),
+                    tree: Set(account.account.tree.to_bytes_vec()),
+                    queue: Set(Some(account.context.queue.to_bytes_vec())),
+                    leaf_index: Set(account.account.leaf_index.0 as i64),
+                    in_output_queue: Set(account.context.in_output_queue),
+                    nullifier_queue_index: Set(account.context.nullifier_queue_index.map(|x| x.0 as i64)),
+                    nullified_in_tree: Set(false),
+                    tree_type: Set(Some(account.context.tree_type as i32)),
+                    nullifier: Set(account.context.nullifier.as_ref().map(|x| x.to_vec())),
+                    owner: Set(account.account.owner.to_bytes_vec()),
+                    lamports: Set(Decimal::from(account.account.lamports.0)),
+                    spent: Set(false),
+                    slot_created: Set(account.account.slot_created.0 as i64),
+                    seq: Set(account.account.seq.map(|x| x.0 as i64)),
+                    prev_spent: Set(None),
+                    tx_hash: Default::default(),
+                })
+                .collect();
+            accounts::Entity::insert_many(account_models)
+                .on_conflict(
+                    OnConflict::column(accounts::Column::Hash)
+                        .do_nothing()
+                        .to_owned(),
+                )
+                .build(db_backend)
+        };
         execute_account_update_query_and_update_balances(
             txn,
             query,
@@ -488,13 +572,42 @@ async fn append_output_accounts(
 
 pub async fn persist_token_accounts(
     txn: &DatabaseTransaction,
-    token_accounts: Vec<EnrichedTokenAccount>,
+    enriched_token_accounts: Vec<EnrichedTokenAccount>,
 ) -> Result<(), IngesterError> {
-    let token_models = token_accounts
-        .into_iter()
-        .map(
-            |EnrichedTokenAccount { token_data, hash }| token_accounts::ActiveModel {
-                hash: Set(hash.into()),
+    let db_backend = txn.get_database_backend();
+
+    let query = if db_backend == DatabaseBackend::Sqlite {
+        // SQLite: Use raw SQL with string values to preserve precision
+        let values: Vec<String> = enriched_token_accounts
+            .iter()
+            .map(|EnrichedTokenAccount { token_data, hash }| {
+                let hash_sql = bytes_to_sqlite_sql_format(hash.clone().into());
+                let owner = bytes_to_sqlite_sql_format(token_data.owner.to_bytes_vec());
+                let mint = bytes_to_sqlite_sql_format(token_data.mint.to_bytes_vec());
+                let delegate = option_bytes_to_sqlite(token_data.delegate.map(|d| d.to_bytes_vec()));
+                let state = token_data.state as i32;
+                let spent = bool_to_sqlite(false);
+                let prev_spent = "NULL";
+                // Store amount as TEXT string to preserve precision
+                let amount = format!("'{}'", token_data.amount.0);
+                let tlv = option_bytes_to_sqlite(token_data.tlv.as_ref().map(|t| t.0.clone()));
+
+                format!(
+                    "({hash_sql}, {owner}, {mint}, {delegate}, {state}, {spent}, {prev_spent}, {amount}, {tlv})"
+                )
+            })
+            .collect();
+        let values_string = values.join(", ");
+        let sql = format!(
+            "INSERT INTO token_accounts (hash, owner, mint, delegate, state, spent, prev_spent, amount, tlv) VALUES {values_string} ON CONFLICT (hash) DO NOTHING"
+        );
+        Statement::from_string(db_backend, sql)
+    } else {
+        // PostgreSQL: Use SeaORM models
+        let token_models: Vec<token_accounts::ActiveModel> = enriched_token_accounts
+            .iter()
+            .map(|EnrichedTokenAccount { token_data, hash }| token_accounts::ActiveModel {
+                hash: Set(hash.clone().into()),
                 mint: Set(token_data.mint.to_bytes_vec()),
                 owner: Set(token_data.owner.to_bytes_vec()),
                 amount: Set(Decimal::from(token_data.amount.0)),
@@ -502,18 +615,17 @@ pub async fn persist_token_accounts(
                 state: Set(token_data.state as i32),
                 spent: Set(false),
                 prev_spent: Set(None),
-                tlv: Set(token_data.tlv.map(|t| t.0)),
-            },
-        )
-        .collect::<Vec<_>>();
-
-    let query = token_accounts::Entity::insert_many(token_models)
-        .on_conflict(
-            OnConflict::column(token_accounts::Column::Hash)
-                .do_nothing()
-                .to_owned(),
-        )
-        .build(txn.get_database_backend());
+                tlv: Set(token_data.tlv.as_ref().map(|t| t.0.clone())),
+            })
+            .collect();
+        token_accounts::Entity::insert_many(token_models)
+            .on_conflict(
+                OnConflict::column(token_accounts::Column::Hash)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .build(db_backend)
+    };
 
     execute_account_update_query_and_update_balances(
         txn,

@@ -1,5 +1,8 @@
 use super::super::error::PhotonApiError;
-use super::utils::{parse_decimal, AccountBalanceResponse, LamportModel};
+use super::utils::{
+    is_sqlite, parse_balance_string, parse_decimal, AccountBalanceResponse, LamportModel,
+    LamportModelString,
+};
 use crate::common::typedefs::context::Context;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::common::typedefs::unsigned_integer::UnsignedInteger;
@@ -21,16 +24,29 @@ pub async fn get_compressed_balance_by_owner(
     let context = Context::extract(conn).await?;
     let owner = request.owner;
 
-    let balances = owner_balances::Entity::find()
-        .select_only()
-        .column(owner_balances::Column::Lamports)
-        .filter(owner_balances::Column::Owner.eq::<Vec<u8>>(owner.into()))
-        .into_model::<LamportModel>()
-        .all(conn)
-        .await?
-        .iter()
-        .map(|x| parse_decimal(x.lamports))
-        .collect::<Result<Vec<u64>, PhotonApiError>>()?;
+    let balances = if is_sqlite(conn) {
+        owner_balances::Entity::find()
+            .select_only()
+            .column(owner_balances::Column::Lamports)
+            .filter(owner_balances::Column::Owner.eq::<Vec<u8>>(owner.into()))
+            .into_model::<LamportModelString>()
+            .all(conn)
+            .await?
+            .iter()
+            .map(|x| parse_balance_string(&x.lamports))
+            .collect::<Result<Vec<u64>, PhotonApiError>>()?
+    } else {
+        owner_balances::Entity::find()
+            .select_only()
+            .column(owner_balances::Column::Lamports)
+            .filter(owner_balances::Column::Owner.eq::<Vec<u8>>(owner.into()))
+            .into_model::<LamportModel>()
+            .all(conn)
+            .await?
+            .iter()
+            .map(|x| parse_decimal(x.lamports))
+            .collect::<Result<Vec<u64>, PhotonApiError>>()?
+    };
 
     let total_balance = balances.iter().sum::<u64>();
 
