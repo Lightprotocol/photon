@@ -350,11 +350,19 @@ async fn execute_account_update_query_and_update_balances(
         let prev_spent: Option<bool> = row.try_get("", "prev_spent")?;
         match (prev_spent, &modification_type) {
             (_, ModificationType::Append) | (Some(false), ModificationType::Spend) => {
+                // SQLite: columns are TEXT after migration, read as String and parse
+                // Postgres: columns are DECIMAL, read directly as Decimal
                 let mut amount_of_interest = match db_backend {
                     DatabaseBackend::Postgres => row.try_get("", balance_column)?,
                     DatabaseBackend::Sqlite => {
-                        let amount: i64 = row.try_get("", balance_column)?;
-                        Decimal::from(amount)
+                        let amount_str: String = row.try_get("", balance_column)?;
+                        let amount_u64 = amount_str.parse::<u64>().map_err(|_| {
+                            IngesterError::DatabaseError(format!(
+                                "Invalid {} value in SQLite: {}",
+                                balance_column, amount_str
+                            ))
+                        })?;
+                        Decimal::from(amount_u64)
                     }
                     _ => panic!("Unsupported database backend"),
                 };
@@ -378,19 +386,41 @@ async fn execute_account_update_query_and_update_balances(
             _ => {}
         }
     }
+
+    // Format values for INSERT - SQLite uses TEXT columns, Postgres uses DECIMAL
     let values = balance_modifications
         .into_iter()
         .filter(|(_, value)| *value != Decimal::from(0))
-        .map(|(key, value)| format!("({}, {})", key, value))
+        .map(|(key, value)| {
+            match db_backend {
+                DatabaseBackend::Sqlite => {
+                    // Store as quoted string for TEXT column
+                    format!("({}, '{}')", key, value)
+                }
+                _ => {
+                    // Postgres: numeric value
+                    format!("({}, {})", key, value)
+                }
+            }
+        })
         .collect::<Vec<String>>();
 
     if !values.is_empty() {
         let values_string = values.join(", ");
-        let raw_sql = format!(
-            "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
-            VALUES {values_string} ON CONFLICT (owner{additional_columns})
-            DO UPDATE SET {balance_column} = {owner_table_name}.{balance_column} + excluded.{balance_column}",
-        );
+        // SQLite: TEXT columns require CAST for arithmetic operations
+        // Postgres: DECIMAL columns support direct arithmetic
+        let raw_sql = match db_backend {
+            DatabaseBackend::Sqlite => format!(
+                "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
+                VALUES {values_string} ON CONFLICT (owner{additional_columns})
+                DO UPDATE SET {balance_column} = CAST(CAST({owner_table_name}.{balance_column} AS INTEGER) + CAST(excluded.{balance_column} AS INTEGER) AS TEXT)",
+            ),
+            _ => format!(
+                "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
+                VALUES {values_string} ON CONFLICT (owner{additional_columns})
+                DO UPDATE SET {balance_column} = {owner_table_name}.{balance_column} + excluded.{balance_column}",
+            ),
+        };
         txn.execute(Statement::from_string(db_backend, raw_sql))
             .await?;
     }
