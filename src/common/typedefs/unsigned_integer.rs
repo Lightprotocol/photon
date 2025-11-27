@@ -90,3 +90,11 @@ impl borsh::BorshSerialize for UnsignedInteger {
         writer.write_all(&self.0.to_le_bytes())
     }
 }
+
+/// Serialize u64 as string to prevent precision loss.
+pub fn serialize_u64_as_string<S>(value: &UnsignedInteger, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&value.0.to_string())
+}
