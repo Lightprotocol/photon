@@ -1,10 +1,6 @@
 use byteorder::{ByteOrder, LittleEndian};
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
-use sqlx::types::Decimal;
 use utoipa::ToSchema;
 
 use crate::common::typedefs::bs58_string::Base58String;
@@ -15,19 +11,10 @@ use crate::common::typedefs::unsigned_integer::UnsignedInteger;
 use crate::dao::generated::token_owner_balances;
 
 use super::super::error::PhotonApiError;
-use super::utils::{is_sqlite, parse_balance_string, parse_decimal, PAGE_LIMIT};
-
-#[derive(FromQueryResult)]
-struct TokenHolderModel {
-    pub owner: Vec<u8>,
-    pub amount: Decimal,
-}
-
-#[derive(FromQueryResult)]
-struct TokenHolderModelString {
-    pub owner: Vec<u8>,
-    pub amount: String,
-}
+use super::utils::{
+    is_sqlite, parse_balance_string, parse_decimal, OwnerBalanceModel, OwnerBalanceModelString,
+    PAGE_LIMIT,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct OwnerBalance {
@@ -103,14 +90,14 @@ pub async fn get_compressed_mint_token_holders(
             .order_by_desc(token_owner_balances::Column::Amount)
             .order_by_desc(token_owner_balances::Column::Owner)
             .limit(limit)
-            .into_model::<TokenHolderModelString>()
+            .into_model::<OwnerBalanceModelString>()
             .all(conn)
             .await?
             .drain(..)
-            .map(|token_owner_balance| {
+            .map(|m| {
                 Ok(OwnerBalance {
-                    owner: token_owner_balance.owner.try_into()?,
-                    balance: UnsignedInteger(parse_balance_string(&token_owner_balance.amount)?),
+                    owner: m.owner.try_into()?,
+                    balance: UnsignedInteger(parse_balance_string(&m.amount)?),
                 })
             })
             .collect::<Result<Vec<OwnerBalance>, PhotonApiError>>()?
@@ -123,14 +110,14 @@ pub async fn get_compressed_mint_token_holders(
             .order_by_desc(token_owner_balances::Column::Amount)
             .order_by_desc(token_owner_balances::Column::Owner)
             .limit(limit)
-            .into_model::<TokenHolderModel>()
+            .into_model::<OwnerBalanceModel>()
             .all(conn)
             .await?
             .drain(..)
-            .map(|token_owner_balance| {
+            .map(|m| {
                 Ok(OwnerBalance {
-                    owner: token_owner_balance.owner.try_into()?,
-                    balance: UnsignedInteger(parse_decimal(token_owner_balance.amount)?),
+                    owner: m.owner.try_into()?,
+                    balance: UnsignedInteger(parse_decimal(m.amount)?),
                 })
             })
             .collect::<Result<Vec<OwnerBalance>, PhotonApiError>>()?

@@ -321,6 +321,7 @@ impl CompressedAccountRequest {
     }
 }
 
+// Query result models - Decimal for PostgreSQL, String for SQLite
 #[derive(FromQueryResult)]
 pub struct BalanceModel {
     pub amount: Decimal,
@@ -331,7 +332,6 @@ pub struct LamportModel {
     pub lamports: Decimal,
 }
 
-// SQLite-specific models that read TEXT columns as String
 #[derive(FromQueryResult)]
 pub struct BalanceModelString {
     pub amount: String,
@@ -341,6 +341,32 @@ pub struct BalanceModelString {
 pub struct LamportModelString {
     pub lamports: String,
 }
+
+// Generic query result with mint + balance
+#[derive(FromQueryResult)]
+pub struct MintBalanceModel {
+    pub mint: Vec<u8>,
+    pub amount: Decimal,
+}
+
+#[derive(FromQueryResult)]
+pub struct MintBalanceModelString {
+    pub mint: Vec<u8>,
+    pub amount: String,
+}
+
+#[derive(FromQueryResult)]
+pub struct OwnerBalanceModel {
+    pub owner: Vec<u8>,
+    pub amount: Decimal,
+}
+
+#[derive(FromQueryResult)]
+pub struct OwnerBalanceModelString {
+    pub owner: Vec<u8>,
+    pub amount: String,
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(rename_all = "camelCase")]
