@@ -25,7 +25,8 @@ use log::debug;
 use persisted_indexed_merkle_tree::persist_indexed_tree_updates;
 use sea_orm::{
     sea_query::OnConflict, ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseTransaction,
-    EntityTrait, Order, QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set, Statement,
+    EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set,
+    Statement,
 };
 use solana_pubkey::{pubkey, Pubkey};
 use solana_signature::Signature;
@@ -97,6 +98,9 @@ pub async fn persist_state_update(
         batch_new_addresses.len()
     );
 
+    // Extract slot from transactions for event publishing
+    let slot = transactions.iter().next().map(|tx| tx.slot).unwrap_or(0);
+
     debug!("Persisting addresses...");
     for chunk in batch_new_addresses.chunks(MAX_SQL_INSERTS) {
         insert_addresses_into_queues(txn, chunk).await?;
@@ -104,7 +108,7 @@ pub async fn persist_state_update(
 
     debug!("Persisting output accounts...");
     for chunk in out_accounts.chunks(MAX_SQL_INSERTS) {
-        append_output_accounts(txn, chunk).await?;
+        append_output_accounts(txn, chunk, slot).await?;
     }
 
     debug!("Persisting spent accounts...");
@@ -179,9 +183,11 @@ pub async fn persist_state_update(
 
     // Process each tree's nodes with the correct height
     for (tree_pubkey, tree_nodes) in nodes_by_tree {
-        let tree_info = tree_info_cache.get(&tree_pubkey).ok_or_else(|| {
-            IngesterError::ParserError(format!("Tree metadata not found for tree {}", tree_pubkey))
-        })?;
+        let tree_info = tree_info_cache.get(&tree_pubkey)
+            .ok_or_else(|| IngesterError::ParserError(format!(
+                "Tree metadata not found for tree {}. Tree metadata must be synced before indexing.",
+                tree_pubkey
+            )))?;
         let tree_height = tree_info.height + 1; // +1 for indexed trees
 
         // Process in chunks
@@ -344,11 +350,19 @@ async fn execute_account_update_query_and_update_balances(
         let prev_spent: Option<bool> = row.try_get("", "prev_spent")?;
         match (prev_spent, &modification_type) {
             (_, ModificationType::Append) | (Some(false), ModificationType::Spend) => {
+                // SQLite: columns are TEXT after migration, read as String and parse
+                // Postgres: columns are DECIMAL, read directly as Decimal
                 let mut amount_of_interest = match db_backend {
                     DatabaseBackend::Postgres => row.try_get("", balance_column)?,
                     DatabaseBackend::Sqlite => {
-                        let amount: i64 = row.try_get("", balance_column)?;
-                        Decimal::from(amount)
+                        let amount_str: String = row.try_get("", balance_column)?;
+                        let amount_u64 = amount_str.parse::<u64>().map_err(|_| {
+                            IngesterError::DatabaseError(format!(
+                                "Invalid {} value in SQLite: {}",
+                                balance_column, amount_str
+                            ))
+                        })?;
+                        Decimal::from(amount_u64)
                     }
                     _ => panic!("Unsupported database backend"),
                 };
@@ -372,19 +386,41 @@ async fn execute_account_update_query_and_update_balances(
             _ => {}
         }
     }
+
+    // Format values for INSERT - SQLite uses TEXT columns, Postgres uses DECIMAL
     let values = balance_modifications
         .into_iter()
         .filter(|(_, value)| *value != Decimal::from(0))
-        .map(|(key, value)| format!("({}, {})", key, value))
+        .map(|(key, value)| {
+            match db_backend {
+                DatabaseBackend::Sqlite => {
+                    // Store as quoted string for TEXT column
+                    format!("({}, '{}')", key, value)
+                }
+                _ => {
+                    // Postgres: numeric value
+                    format!("({}, {})", key, value)
+                }
+            }
+        })
         .collect::<Vec<String>>();
 
     if !values.is_empty() {
         let values_string = values.join(", ");
-        let raw_sql = format!(
-            "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
-            VALUES {values_string} ON CONFLICT (owner{additional_columns})
-            DO UPDATE SET {balance_column} = {owner_table_name}.{balance_column} + excluded.{balance_column}",
-        );
+        // SQLite: TEXT columns require CAST for arithmetic operations
+        // Postgres: DECIMAL columns support direct arithmetic
+        let raw_sql = match db_backend {
+            DatabaseBackend::Sqlite => format!(
+                "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
+                VALUES {values_string} ON CONFLICT (owner{additional_columns})
+                DO UPDATE SET {balance_column} = CAST(CAST({owner_table_name}.{balance_column} AS INTEGER) + CAST(excluded.{balance_column} AS INTEGER) AS TEXT)",
+            ),
+            _ => format!(
+                "INSERT INTO {owner_table_name} (owner {additional_columns}, {balance_column})
+                VALUES {values_string} ON CONFLICT (owner{additional_columns})
+                DO UPDATE SET {balance_column} = {owner_table_name}.{balance_column} + excluded.{balance_column}",
+            ),
+        };
         txn.execute(Statement::from_string(db_backend, raw_sql))
             .await?;
     }
@@ -415,12 +451,20 @@ async fn insert_addresses_into_queues(
         .build(txn.get_database_backend());
     txn.execute(query).await?;
 
+    let mut addresses_by_tree: HashMap<Pubkey, usize> = HashMap::new();
+    for address in addresses {
+        if let Ok(tree_pubkey) = Pubkey::try_from(address.tree.to_bytes_vec().as_slice()) {
+            *addresses_by_tree.entry(tree_pubkey).or_insert(0) += 1;
+        }
+    }
+
     Ok(())
 }
 
 async fn append_output_accounts(
     txn: &DatabaseTransaction,
     out_accounts: &[AccountWithContext],
+    slot: u64,
 ) -> Result<(), IngesterError> {
     let mut account_models = Vec::new();
     let mut token_accounts = Vec::new();
@@ -481,6 +525,35 @@ async fn append_output_accounts(
             debug!("Persisting {} token accounts...", token_accounts.len());
             persist_token_accounts(txn, token_accounts).await?;
         }
+    }
+
+    let mut accounts_by_tree_queue: HashMap<(Pubkey, Pubkey), usize> = HashMap::new();
+
+    for account in out_accounts {
+        if account.context.in_output_queue {
+            if let (Ok(tree_pubkey), Ok(queue_pubkey)) = (
+                Pubkey::try_from(account.account.tree.to_bytes_vec().as_slice()),
+                Pubkey::try_from(account.context.queue.to_bytes_vec().as_slice()),
+            ) {
+                *accounts_by_tree_queue
+                    .entry((tree_pubkey, queue_pubkey))
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+
+    for ((tree, queue), count) in accounts_by_tree_queue {
+        let queue_size = accounts::Entity::find()
+            .filter(accounts::Column::Tree.eq(tree.to_bytes().to_vec()))
+            .filter(accounts::Column::InOutputQueue.eq(true))
+            .count(txn)
+            .await
+            .unwrap_or(0) as usize;
+
+        debug!(
+            "Publishing OutputQueueInsert event: tree={}, queue={}, delta={}, total_queue_size={}, slot={}",
+            tree, queue, count, queue_size, slot
+        );
     }
 
     Ok(())

@@ -4,7 +4,7 @@ use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::common::typedefs::token_data::TokenData;
-use crate::common::typedefs::unsigned_integer::UnsignedInteger;
+use crate::common::typedefs::unsigned_integer::{serialize_u64_as_string, UnsignedInteger};
 use crate::dao::generated::accounts::Model;
 use crate::ingester::error::IngesterError;
 use crate::ingester::persist::COMPRESSED_TOKEN_PROGRAM;
@@ -19,6 +19,7 @@ pub struct Account {
     pub address: Option<SerializablePubkey>,
     pub data: Option<AccountData>,
     pub owner: SerializablePubkey,
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub lamports: UnsignedInteger,
     pub tree: SerializablePubkey,
     pub leaf_index: UnsignedInteger,
@@ -33,12 +34,23 @@ pub struct Account {
 impl Account {
     pub fn parse_token_data(&self) -> Result<Option<TokenData>, IngesterError> {
         match self.data.as_ref() {
-            Some(data) if self.owner.0 == COMPRESSED_TOKEN_PROGRAM => {
-                let data_slice = data.data.0.as_slice();
-                let token_data = TokenData::try_from_slice(data_slice).map_err(|e| {
-                    IngesterError::ParserError(format!("Failed to parse token data: {:?}", e))
-                })?;
-                Ok(Some(token_data))
+            Some(data) => {
+                let is_v1_token = data.discriminator.0.to_le_bytes() == [2, 0, 0, 0, 0, 0, 0, 0];
+                let is_v2_token = data.discriminator.0.to_le_bytes() == [0, 0, 0, 0, 0, 0, 0, 3];
+                let is_sha_flat_token =
+                    data.discriminator.0.to_le_bytes() == [0, 0, 0, 0, 0, 0, 0, 4];
+
+                if self.owner.0 == COMPRESSED_TOKEN_PROGRAM
+                    && (is_v1_token || is_v2_token || is_sha_flat_token)
+                {
+                    let data_slice = data.data.0.as_slice();
+                    let token_data = TokenData::try_from_slice(data_slice).map_err(|e| {
+                        IngesterError::ParserError(format!("Failed to parse token data: {:?}", e))
+                    })?;
+                    Ok(Some(token_data))
+                } else {
+                    Ok(None)
+                }
             }
             _ => Ok(None),
         }
@@ -48,6 +60,7 @@ impl Account {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema, Default)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccountData {
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub discriminator: UnsignedInteger,
     pub data: Base64String,
     pub data_hash: Hash,

@@ -43,6 +43,10 @@ struct Args {
     #[arg(short, long, default_value_t = 8784)]
     port: u16,
 
+    /// Port for the gRPC API server (optional, if not provided gRPC server won't start)
+    #[arg(long)]
+    grpc_port: Option<u16>,
+
     /// URL of the RPC server
     #[arg(short, long, default_value = "http://127.0.0.1:8899")]
     rpc_url: String,
@@ -52,7 +56,7 @@ struct Args {
     db_url: Option<String>,
 
     /// The start slot to begin indexing from. Defaults to the last indexed slot in the database plus
-    /// one.  
+    /// one.
     #[arg(short, long)]
     start_slot: Option<String>,
 

@@ -4,8 +4,9 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use super::{
-    bs64_string::Base64String, serializable_pubkey::SerializablePubkey,
-    unsigned_integer::UnsignedInteger,
+    bs64_string::Base64String,
+    serializable_pubkey::SerializablePubkey,
+    unsigned_integer::{serialize_u64_as_string, UnsignedInteger},
 };
 
 #[derive(
@@ -40,6 +41,7 @@ pub struct TokenData {
     /// The owner of this account.
     pub owner: SerializablePubkey,
     /// The amount of tokens this account holds.
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub amount: UnsignedInteger,
     /// If `delegate` is `Some` then `delegated_amount` represents
     /// the amount authorized by the delegate
