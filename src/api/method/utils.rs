@@ -4,7 +4,7 @@ use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::serializable_signature::SerializableSignature;
 use crate::common::typedefs::token_data::{AccountState, TokenData};
 use crate::common::typedefs::unix_timestamp::UnixTimestamp;
-use crate::common::typedefs::unsigned_integer::UnsignedInteger;
+use crate::common::typedefs::unsigned_integer::{serialize_u64_as_string, UnsignedInteger};
 use crate::dao::generated::{accounts, token_accounts};
 
 use byteorder::{ByteOrder, LittleEndian};
@@ -612,6 +612,7 @@ pub struct GetPaginatedSignaturesResponse {
 // We do not use generics to simplify documentation generation.
 pub struct AccountBalanceResponse {
     pub context: Context,
+    #[serde(serialize_with = "serialize_u64_as_string")]
     pub value: UnsignedInteger,
 }
 
