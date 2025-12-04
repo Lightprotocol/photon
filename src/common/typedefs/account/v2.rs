@@ -1,3 +1,4 @@
+use anchor_lang::AnchorDeserialize;
 use crate::api::error::PhotonApiError;
 use crate::api::method::get_validity_proof::MerkleContextV2;
 use crate::api::method::utils::parse_decimal;
@@ -5,8 +6,11 @@ use crate::common::typedefs::account::AccountData;
 use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
+use crate::common::typedefs::token_data::TokenData;
 use crate::common::typedefs::unsigned_integer::UnsignedInteger;
 use crate::dao::generated::accounts::Model;
+use crate::ingester::error::IngesterError;
+use crate::ingester::persist::COMPRESSED_TOKEN_PROGRAM;
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -32,6 +36,23 @@ pub struct AccountV2 {
     // saving one RPC roundtrip.
     pub prove_by_index: bool,
     pub merkle_context: MerkleContextV2,
+}
+
+impl AccountV2 {
+    pub fn parse_token_data(&self) -> Result<Option<TokenData>, IngesterError> {
+        match self.data.as_ref() {
+            Some(data)
+                if self.owner.0 == COMPRESSED_TOKEN_PROGRAM && data.is_c_token_discriminator() =>
+            {
+                let data_slice = data.data.0.as_slice();
+                let token_data = TokenData::try_from_slice(data_slice).map_err(|e| {
+                    IngesterError::ParserError(format!("Failed to parse token data: {:?}", e))
+                })?;
+                Ok(Some(token_data))
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 impl TryFrom<Model> for AccountV2 {
