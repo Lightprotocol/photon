@@ -5,7 +5,7 @@ use light_batched_merkle_tree::{
 use light_compressed_account::QueueType;
 use light_hasher::hash_chain::create_hash_chain_from_slice;
 use light_zero_copy::vec::ZeroCopyVecU64;
-use log::{debug, error, trace, warn};
+use log::{debug, error, trace};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_pubkey::Pubkey;
@@ -350,7 +350,9 @@ async fn compute_hash_chains_from_db(
             })?;
             hash_chains.push(hash_chain);
         } else {
-            warn!(
+            // Incomplete batches are expected during normal operation
+            // Only log at debug level to reduce noise
+            debug!(
                 "Incomplete batch {} for tree {} type {:?} with {} elements when expecting {}",
                 i,
                 tree_pubkey,
