@@ -1,11 +1,11 @@
 use crate::common::typedefs::account::{Account, AccountV2};
 use crate::common::typedefs::bs58_string::Base58String;
-use crate::common::typedefs::bs64_string::Base64String;
 use crate::common::typedefs::serializable_signature::SerializableSignature;
-use crate::common::typedefs::token_data::{AccountState, TokenData};
+use crate::common::typedefs::token_data::{AccountState, ExtensionStruct, TokenData};
 use crate::common::typedefs::unix_timestamp::UnixTimestamp;
 use crate::common::typedefs::unsigned_integer::UnsignedInteger;
 use crate::dao::generated::{accounts, token_accounts};
+use borsh::BorshDeserialize;
 
 use byteorder::{ByteOrder, LittleEndian};
 use sea_orm::sea_query::SimpleExpr;
@@ -198,7 +198,18 @@ pub async fn fetch_token_accounts(
                             e
                         ))
                     })?,
-                    tlv: token_account.tlv.map(Base64String),
+                    tlv: token_account
+                        .tlv
+                        .map(|bytes| {
+                            Vec::<ExtensionStruct>::deserialize(&mut bytes.as_slice())
+                                .map_err(|e| {
+                                    PhotonApiError::UnexpectedError(format!(
+                                        "Unable to deserialize tlv: {}",
+                                        e
+                                    ))
+                                })
+                        })
+                        .transpose()?,
                 },
             })
         })
@@ -738,7 +749,18 @@ pub async fn fetch_token_accounts_v2(
                             e
                         ))
                     })?,
-                    tlv: token_account.tlv.map(Base64String),
+                    tlv: token_account
+                        .tlv
+                        .map(|bytes| {
+                            Vec::<ExtensionStruct>::deserialize(&mut bytes.as_slice())
+                                .map_err(|e| {
+                                    PhotonApiError::UnexpectedError(format!(
+                                        "Unable to deserialize tlv: {}",
+                                        e
+                                    ))
+                                })
+                        })
+                        .transpose()?,
                 },
             })
         })

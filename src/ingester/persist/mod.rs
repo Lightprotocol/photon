@@ -10,6 +10,7 @@ use crate::{
     ingester::parser::state_update::Transaction,
     metric,
 };
+use borsh::BorshSerialize;
 use itertools::Itertools;
 use light_poseidon::{Poseidon, PoseidonBytesHasher};
 use persisted_batch_event::persist_batch_events;
@@ -504,7 +505,7 @@ pub async fn persist_token_accounts(
                 state: Set(token_data.state as i32),
                 spent: Set(false),
                 prev_spent: Set(None),
-                tlv: Set(token_data.tlv.map(|t| t.0)),
+                tlv: Set(token_data.tlv.map(|t| t.try_to_vec().unwrap())),
             },
         )
         .collect::<Vec<_>>();
