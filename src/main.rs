@@ -227,6 +227,7 @@ async fn main() {
         (Some(snapshot_dir), None) => Some(Arc::new(DirectoryAdapter::from_local_directory(
             snapshot_dir,
         ))),
+        #[cfg(feature = "gcs")]
         (None, Some(gcs_bucket)) => Some(Arc::new(
             DirectoryAdapter::from_gcs_bucket_and_prefix_and_env(
                 gcs_bucket,
@@ -234,6 +235,11 @@ async fn main() {
             )
             .await,
         )),
+        #[cfg(not(feature = "gcs"))]
+        (None, Some(_)) => {
+            error!("GCS support is not enabled. Compile with --features gcs to enable.");
+            std::process::exit(1);
+        }
         (None, None) => None,
         (Some(_), Some(_)) => {
             error!("Cannot specify both snapshot_dir and gcs_bucket");

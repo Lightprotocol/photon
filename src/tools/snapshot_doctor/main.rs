@@ -77,6 +77,7 @@ async fn create_directory_adapter(args: &Args) -> anyhow::Result<Arc<DirectoryAd
             DirectoryAdapter::from_r2_bucket_and_prefix_and_env(r2_bucket, args.r2_prefix.clone())
                 .await,
         )),
+        #[cfg(feature = "gcs")]
         (None, None, Some(gcs_bucket)) => Ok(Arc::new(
             DirectoryAdapter::from_gcs_bucket_and_prefix_and_env(
                 gcs_bucket,
