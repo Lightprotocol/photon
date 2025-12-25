@@ -17,6 +17,7 @@ pub struct BlockStreamConfig {
     pub geyser_url: Option<String>,
     pub max_concurrent_block_fetches: usize,
     pub last_indexed_slot: u64,
+    pub end_slot: Option<u64>,
 }
 
 impl BlockStreamConfig {
@@ -37,6 +38,7 @@ impl BlockStreamConfig {
                 self.rpc_client.clone(),
                 self.last_indexed_slot,
                 self.max_concurrent_block_fetches,
+                self.end_slot,
             ))
         } else {
             None

@@ -337,6 +337,7 @@ async fn main() {
                 max_concurrent_block_fetches,
                 last_indexed_slot,
                 geyser_url: args.grpc_url,
+                end_slot: None,
             };
 
             (

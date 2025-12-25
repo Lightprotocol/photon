@@ -5,6 +5,33 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Track if we're in the middle of processing an epoch
+CURRENT_EPOCH=""
+RPC_PID=""
+
+# Cleanup function for graceful shutdown
+cleanup() {
+    local exit_code=$?
+    log_warn "Caught interrupt signal, cleaning up..."
+
+    # Kill RPC server if running
+    if [ -n "$RPC_PID" ] && kill -0 $RPC_PID 2>/dev/null; then
+        log_info "Stopping RPC server (PID: $RPC_PID)..."
+        kill $RPC_PID 2>/dev/null || true
+        wait $RPC_PID 2>/dev/null || true
+    fi
+
+    if [ -n "$CURRENT_EPOCH" ]; then
+        log_error "Interrupted while processing epoch $CURRENT_EPOCH"
+        log_error "You may need to reprocess this epoch from where it left off"
+    fi
+
+    exit 130  # Standard exit code for SIGINT
+}
+
+# Set up trap for SIGINT (Ctrl+C) and SIGTERM
+trap cleanup SIGINT SIGTERM
+
 # Configuration
 START_SLOT=${START_SLOT:-286193746}
 END_SLOT=${END_SLOT:-388871421}
@@ -82,6 +109,7 @@ log_info "Snapshots will be stored in: $SNAPSHOT_DIR"
 
 # Process each epoch
 for EPOCH in $(seq $START_EPOCH $END_EPOCH); do
+    CURRENT_EPOCH=$EPOCH
     EPOCH_START=$(epoch_start_slot $EPOCH)
     EPOCH_END=$(epoch_end_slot $EPOCH)
 
@@ -283,6 +311,10 @@ EOF
 
     log_info "Epoch $EPOCH complete! Freed ~600GB"
     log_info ""
+
+    # Clear current epoch marker (epoch completed successfully)
+    CURRENT_EPOCH=""
+    RPC_PID=""
 
     # Update start slot for next iteration
     START_SLOT=$((EPOCH_END + 1))

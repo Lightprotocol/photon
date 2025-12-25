@@ -21,11 +21,21 @@ use crate::{
 
 const SKIPPED_BLOCK_ERRORS: [i64; 2] = [-32007, -32009];
 
-fn get_slot_stream(rpc_client: Arc<RpcClient>, start_slot: u64) -> impl Stream<Item = u64> {
+fn get_slot_stream(
+    rpc_client: Arc<RpcClient>,
+    start_slot: u64,
+    end_slot: Option<u64>,
+) -> impl Stream<Item = u64> {
     stream! {
         start_latest_slot_updater(rpc_client.clone()).await;
         let mut next_slot_to_fetch = start_slot;
         loop {
+            // If we have an end_slot and we've passed it, terminate the stream
+            if let Some(end) = end_slot {
+                if next_slot_to_fetch > end {
+                    break;
+                }
+            }
             if next_slot_to_fetch > LATEST_SLOT.load(Ordering::SeqCst) {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 continue;
@@ -40,13 +50,14 @@ pub fn get_block_poller_stream(
     rpc_client: Arc<RpcClient>,
     mut last_indexed_slot: u64,
     max_concurrent_block_fetches: usize,
+    end_slot: Option<u64>,
 ) -> impl Stream<Item = Vec<BlockInfo>> {
     stream! {
         let start_slot = match last_indexed_slot {
             0 => 0,
             last_indexed_slot => last_indexed_slot + 1
         };
-        let slot_stream = get_slot_stream(rpc_client.clone(), start_slot);
+        let slot_stream = get_slot_stream(rpc_client.clone(), start_slot, end_slot);
         pin_mut!(slot_stream);
         let block_stream = slot_stream
             .map(|slot| {
