@@ -67,7 +67,7 @@ pub async fn fetch_block_parent_slot(rpc_client: &RpcClient, slot: u64) -> u64 {
             RpcBlockConfig {
                 encoding: Some(UiTransactionEncoding::Base64),
                 transaction_details: Some(TransactionDetails::None),
-                rewards: None,
+                rewards: Some(false),
                 commitment: Some(CommitmentConfig::confirmed()),
                 max_supported_transaction_version: Some(0),
             },

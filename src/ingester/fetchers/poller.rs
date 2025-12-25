@@ -107,7 +107,7 @@ pub async fn fetch_block_with_infinite_retries(
                 RpcBlockConfig {
                     encoding: Some(UiTransactionEncoding::Base64),
                     transaction_details: Some(TransactionDetails::Full),
-                    rewards: None,
+                    rewards: Some(false),
                     commitment: Some(CommitmentConfig::confirmed()),
                     max_supported_transaction_version: Some(0),
                 },

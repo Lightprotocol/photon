@@ -35,6 +35,10 @@ struct Args {
     #[arg(short, long)]
     start_slot: Option<String>,
 
+    /// The end slot to stop indexing at. If not specified, runs indefinitely.
+    #[arg(short, long)]
+    end_slot: Option<u64>,
+
     /// Logging format
     #[arg(short, long, default_value_t = LoggingFormat::Standard)]
     logging_format: LoggingFormat,
@@ -95,6 +99,7 @@ async fn continously_run_snapshotter(
     block_stream_config: BlockStreamConfig,
     full_snapshot_interval_slots: u64,
     incremental_snapshot_interval_slots: u64,
+    end_slot: Option<u64>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         photon_indexer::snapshot::update_snapshot(
@@ -102,6 +107,7 @@ async fn continously_run_snapshotter(
             block_stream_config,
             incremental_snapshot_interval_slots,
             full_snapshot_interval_slots,
+            end_slot,
         )
         .await;
     })
@@ -213,6 +219,7 @@ async fn main() {
 
     let rpc_client = get_rpc_client(&args.rpc_url);
 
+    #[cfg(feature = "gcs")]
     let directory_adapter = match (
         args.snapshot_dir.clone(),
         args.r2_bucket.clone(),
@@ -234,6 +241,21 @@ async fn main() {
         ),
         _ => {
             error!("Exactly one of snapshot_dir, r2_bucket, or gcs_bucket must be provided");
+            return;
+        }
+    };
+
+    #[cfg(not(feature = "gcs"))]
+    let directory_adapter = match (args.snapshot_dir.clone(), args.r2_bucket.clone()) {
+        (Some(snapshot_dir), None) => {
+            Arc::new(DirectoryAdapter::from_local_directory(snapshot_dir))
+        }
+        (None, Some(r2_bucket)) => Arc::new(
+            DirectoryAdapter::from_r2_bucket_and_prefix_and_env(r2_bucket, args.r2_prefix.clone())
+                .await,
+        ),
+        _ => {
+            error!("Exactly one of snapshot_dir or r2_bucket must be provided (GCS support requires --features gcs)");
             return;
         }
     };
@@ -268,6 +290,9 @@ async fn main() {
             }
         };
         info!("Starting from slot: {}", last_indexed_slot + 1);
+        if let Some(end_slot) = args.end_slot {
+            info!("Will stop at slot: {}", end_slot);
+        }
         Some(
             continously_run_snapshotter(
                 directory_adapter.clone(),
@@ -279,6 +304,7 @@ async fn main() {
                 },
                 args.incremental_snapshot_interval_slots,
                 args.snapshot_interval_slots,
+                args.end_slot,
             )
             .await,
         )

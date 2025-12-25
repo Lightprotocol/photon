@@ -19,6 +19,7 @@ use crate::ingester::{
 use anyhow::{anyhow, Context as AnyhowContext, Result};
 use async_stream::stream;
 use bytes::{BufMut, Bytes};
+#[cfg(feature = "gcs")]
 use cloud_storage::Client as GcsClient;
 use futures::stream::StreamExt;
 use futures::{pin_mut, stream, Stream};
@@ -170,12 +171,14 @@ impl R2DirectoryAdapter {
     }
 }
 
+#[cfg(feature = "gcs")]
 pub struct GCSDirectoryAdapter {
     pub gcs_client: GcsClient,
     pub gcs_bucket: String,
     pub gcs_prefix: String,
 }
 
+#[cfg(feature = "gcs")]
 impl GCSDirectoryAdapter {
     async fn read_file(
         arc_self: Arc<Self>,
@@ -357,39 +360,18 @@ impl FileSystemDirectoryApapter {
 pub struct DirectoryAdapter {
     filesystem_directory_adapter: Option<Arc<FileSystemDirectoryApapter>>,
     r2_directory_adapter: Option<Arc<R2DirectoryAdapter>>,
+    #[cfg(feature = "gcs")]
     gcs_directory_adapter: Option<Arc<GCSDirectoryAdapter>>,
 }
 
 impl DirectoryAdapter {
-    pub fn new(
-        filesystem_directory_adapter: Option<FileSystemDirectoryApapter>,
-        r2_directory_adapter: Option<R2DirectoryAdapter>,
-        gcs_directory_adapter: Option<GCSDirectoryAdapter>,
-    ) -> Self {
-        match (
-            &filesystem_directory_adapter,
-            &r2_directory_adapter,
-            &gcs_directory_adapter,
-        ) {
-            (Some(_), None, None) => {}
-            (None, Some(_), None) => {}
-            (None, None, Some(_)) => {}
-            _ => panic!("Exactly one of snapshot_dir, r2_bucket, or gcs_bucket must be provided"),
-        };
-
-        Self {
-            filesystem_directory_adapter: filesystem_directory_adapter.map(Arc::new),
-            r2_directory_adapter: r2_directory_adapter.map(Arc::new),
-            gcs_directory_adapter: gcs_directory_adapter.map(Arc::new),
-        }
-    }
-
     pub fn from_local_directory(snapshot_dir: String) -> Self {
-        Self::new(
-            Some(FileSystemDirectoryApapter { snapshot_dir }),
-            None,
-            None,
-        )
+        Self {
+            filesystem_directory_adapter: Some(Arc::new(FileSystemDirectoryApapter { snapshot_dir })),
+            r2_directory_adapter: None,
+            #[cfg(feature = "gcs")]
+            gcs_directory_adapter: None,
+        }
     }
 
     pub async fn from_r2_bucket_and_prefix_and_env(r2_bucket: String, r2_prefix: String) -> Self {
@@ -412,16 +394,18 @@ impl DirectoryAdapter {
             create_bucket: false,
         };
         let r2_bucket = get_r2_bucket(r2_bucket_args).await;
-        Self::new(
-            None,
-            Some(R2DirectoryAdapter {
+        Self {
+            filesystem_directory_adapter: None,
+            r2_directory_adapter: Some(Arc::new(R2DirectoryAdapter {
                 r2_bucket,
                 r2_prefix,
-            }),
-            None,
-        )
+            })),
+            #[cfg(feature = "gcs")]
+            gcs_directory_adapter: None,
+        }
     }
 
+    #[cfg(feature = "gcs")]
     pub async fn from_gcs_bucket_and_prefix_and_env(
         gcs_bucket: String,
         gcs_prefix: String,
@@ -429,21 +413,22 @@ impl DirectoryAdapter {
         // Initialize GCS client with credentials from environment
         let gcs_client = GcsClient::default();
 
-        Self::new(
-            None,
-            None,
-            Some(GCSDirectoryAdapter {
+        Self {
+            filesystem_directory_adapter: None,
+            r2_directory_adapter: None,
+            gcs_directory_adapter: Some(Arc::new(GCSDirectoryAdapter {
                 gcs_client,
                 gcs_bucket,
                 gcs_prefix,
-            }),
-        )
+            })),
+        }
     }
 
     /// Reads the contents of a file at the given path
     async fn read_file(&self, path: String) -> impl Stream<Item = Result<Bytes>> + 'static {
         let file_system_directory_adapter = self.filesystem_directory_adapter.clone();
         let r2_directory_adapter = self.r2_directory_adapter.clone();
+        #[cfg(feature = "gcs")]
         let gcs_directory_adapter = self.gcs_directory_adapter.clone();
         stream! {
             if let Some(filesystem_directory_adapter) = file_system_directory_adapter {
@@ -458,14 +443,14 @@ impl DirectoryAdapter {
                 while let Some(byte) = stream.next().await {
                     yield byte;
                 }
-            } else if let Some(gcs_directory_adapter) = gcs_directory_adapter {
+            }
+            #[cfg(feature = "gcs")]
+            if let Some(gcs_directory_adapter) = gcs_directory_adapter {
                 let stream = GCSDirectoryAdapter::read_file(gcs_directory_adapter, path).await;
                 pin_mut!(stream);
                 while let Some(byte) = stream.next().await {
                     yield byte;
                 }
-            } else {
-                panic!("No directory adapter provided");
             }
         }
     }
@@ -476,9 +461,11 @@ impl DirectoryAdapter {
             filesystem_directory_adapter.list_files().await
         } else if let Some(r2_directory_adapter) = &self.r2_directory_adapter {
             r2_directory_adapter.list_files().await
-        } else if let Some(gcs_directory_adapter) = &self.gcs_directory_adapter {
-            gcs_directory_adapter.list_files().await
         } else {
+            #[cfg(feature = "gcs")]
+            if let Some(gcs_directory_adapter) = &self.gcs_directory_adapter {
+                return gcs_directory_adapter.list_files().await;
+            }
             panic!("No directory adapter provided");
         }
     }
@@ -489,15 +476,17 @@ impl DirectoryAdapter {
             filesystem_directory_adapter.delete_file(path).await
         } else if let Some(r2_directory_adapter) = &self.r2_directory_adapter {
             r2_directory_adapter.delete_file(path).await
-        } else if let Some(gcs_directory_adapter) = &self.gcs_directory_adapter {
-            gcs_directory_adapter.delete_file(path).await
         } else {
+            #[cfg(feature = "gcs")]
+            if let Some(gcs_directory_adapter) = &self.gcs_directory_adapter {
+                return gcs_directory_adapter.delete_file(path).await;
+            }
             panic!("No directory adapter provided");
         }
     }
 
     /// Write file to the given path
-    async fn write_file(
+    pub async fn write_file(
         &self,
         path: String,
         bytes: impl Stream<Item = Result<Bytes>> + std::marker::Send + 'static,
@@ -506,9 +495,11 @@ impl DirectoryAdapter {
             filesystem_directory_adapter.write_file(path, bytes).await
         } else if let Some(r2_directory_adapter) = &self.r2_directory_adapter {
             r2_directory_adapter.write_file(path, bytes).await
-        } else if let Some(gcs_directory_adapter) = &self.gcs_directory_adapter {
-            gcs_directory_adapter.write_file(path, bytes).await
         } else {
+            #[cfg(feature = "gcs")]
+            if let Some(gcs_directory_adapter) = &self.gcs_directory_adapter {
+                return gcs_directory_adapter.write_file(path, bytes).await;
+            }
             panic!("No directory adapter provided");
         }
     }
@@ -612,6 +603,7 @@ pub async fn update_snapshot(
     block_stream_config: BlockStreamConfig,
     full_snapshot_interval_slots: u64,
     incremental_snapshot_interval_slots: u64,
+    end_slot: Option<u64>,
 ) {
     // Convert stream to iterator
     let block_stream = block_stream_config.load_block_stream();
@@ -621,6 +613,7 @@ pub async fn update_snapshot(
         block_stream_config.last_indexed_slot,
         incremental_snapshot_interval_slots,
         full_snapshot_interval_slots,
+        end_slot,
     )
     .await;
 }
@@ -631,6 +624,7 @@ pub async fn update_snapshot_helper(
     last_indexed_slot: u64,
     incremental_snapshot_interval_slots: u64,
     full_snapshot_interval_slots: u64,
+    end_slot: Option<u64>,
 ) {
     let snapshot_files = get_snapshot_files_with_metadata(directory_adapter.as_ref())
         .await
@@ -648,9 +642,36 @@ pub async fn update_snapshot_helper(
     let mut byte_buffer = Vec::new();
 
     pin_mut!(blocks_stream);
-    while let Some(blocks) = blocks_stream.next().await {
+    'outer: while let Some(blocks) = blocks_stream.next().await {
         for block in blocks {
             let slot = block.metadata.slot;
+
+            // Check if we've reached the end slot
+            if let Some(end) = end_slot {
+                if slot > end {
+                    // Write any remaining buffered data before exiting
+                    if !byte_buffer.is_empty() {
+                        let snapshot_file_path =
+                            format!("snapshot-{}-{}", last_snapshot_slot + 1, end);
+                        info!(
+                            "Writing final snapshot file before exit: {}",
+                            snapshot_file_path
+                        );
+                        let byte_buffer_clone = byte_buffer.clone();
+                        let byte_stream = stream! {
+                            yield Ok(Bytes::from(byte_buffer_clone));
+                        };
+                        directory_adapter
+                            .as_ref()
+                            .write_file(snapshot_file_path, byte_stream)
+                            .await
+                            .unwrap();
+                    }
+                    info!("Reached end slot {}, stopping", end);
+                    break 'outer;
+                }
+            }
+
             let write_full_snapshot = slot - last_full_snapshot_slot
                 + (last_indexed_slot == 0) as u64
                 >= full_snapshot_interval_slots;

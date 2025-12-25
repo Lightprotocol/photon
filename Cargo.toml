@@ -33,6 +33,14 @@ path = "src/snapshot/loader/main.rs"
 name = "photon-tree-validator"
 path = "src/tools/tree_validator/main.rs"
 
+[[bin]]
+name = "photon-snapshot-validator"
+path = "src/tools/snapshot_validator/main.rs"
+
+[[bin]]
+name = "photon-snapshot-doctor"
+path = "src/tools/snapshot_doctor/main.rs"
+
 [dependencies]
 ark-serialize = "0.5"
 ark-bn254 = "0.5"
@@ -132,8 +140,12 @@ async-stream = "0.3.5"
 rand = "0.8.5"
 bincode = "1.3.3"
 rust-s3 = "0.34.0"
-cloud-storage = "0.11.1"
+cloud-storage = { version = "0.11.1", optional = true }
 jsonwebtoken = "9"
+
+[features]
+default = []
+gcs = ["cloud-storage"]
 
 [dev-dependencies]
 function_name = "0.3.0"
