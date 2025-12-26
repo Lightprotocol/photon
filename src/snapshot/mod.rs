@@ -443,13 +443,14 @@ impl DirectoryAdapter {
                 while let Some(byte) = stream.next().await {
                     yield byte;
                 }
-            }
-            #[cfg(feature = "gcs")]
-            if let Some(gcs_directory_adapter) = gcs_directory_adapter {
-                let stream = GCSDirectoryAdapter::read_file(gcs_directory_adapter, path).await;
-                pin_mut!(stream);
-                while let Some(byte) = stream.next().await {
-                    yield byte;
+            } else {
+                #[cfg(feature = "gcs")]
+                if let Some(gcs_directory_adapter) = gcs_directory_adapter {
+                    let stream = GCSDirectoryAdapter::read_file(gcs_directory_adapter, path).await;
+                    pin_mut!(stream);
+                    while let Some(byte) = stream.next().await {
+                        yield byte;
+                    }
                 }
             }
         }
