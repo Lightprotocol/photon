@@ -285,16 +285,33 @@ EOF
 
     cd "$WORK_DIR"
 
-    # Run snapshotter with local RPC (with end-slot to stop at epoch boundary)
-    $SNAPSHOTTER_BIN \
-        --rpc-url "http://127.0.0.1:$LOCAL_RPC_PORT" \
-        --snapshot-dir "$SNAPSHOT_DIR" \
-        --start-slot "$ACTUAL_START" \
-        --end-slot "$ACTUAL_END" \
-        --incremental-snapshot-interval-slots "$SNAPSHOT_INTERVAL" \
-        --snapshot-interval-slots "$FULL_SNAPSHOT_INTERVAL" \
-        -m "$MAX_CONCURRENT_FETCHES" \
-        --disable-api
+    # Check if snapshots already exist (resuming from previous run)
+    EXISTING_SNAPSHOTS=$(ls "$SNAPSHOT_DIR" 2>/dev/null | grep -E '^snapshot-[0-9]+-[0-9]+$' | wc -l)
+
+    if [ "$EXISTING_SNAPSHOTS" -gt 0 ]; then
+        log_info "Found $EXISTING_SNAPSHOTS existing snapshot(s), resuming from last checkpoint..."
+        # Don't specify start-slot, let snapshotter resume from last snapshot
+        $SNAPSHOTTER_BIN \
+            --rpc-url "http://127.0.0.1:$LOCAL_RPC_PORT" \
+            --snapshot-dir "$SNAPSHOT_DIR" \
+            --end-slot "$ACTUAL_END" \
+            --incremental-snapshot-interval-slots "$SNAPSHOT_INTERVAL" \
+            --snapshot-interval-slots "$FULL_SNAPSHOT_INTERVAL" \
+            -m "$MAX_CONCURRENT_FETCHES" \
+            --disable-api
+    else
+        log_info "No existing snapshots, starting fresh from slot $ACTUAL_START..."
+        # Run snapshotter with local RPC (with end-slot to stop at epoch boundary)
+        $SNAPSHOTTER_BIN \
+            --rpc-url "http://127.0.0.1:$LOCAL_RPC_PORT" \
+            --snapshot-dir "$SNAPSHOT_DIR" \
+            --start-slot "$ACTUAL_START" \
+            --end-slot "$ACTUAL_END" \
+            --incremental-snapshot-interval-slots "$SNAPSHOT_INTERVAL" \
+            --snapshot-interval-slots "$FULL_SNAPSHOT_INTERVAL" \
+            -m "$MAX_CONCURRENT_FETCHES" \
+            --disable-api
+    fi
 
     log_info "Snapshotter finished for epoch $EPOCH"
 
