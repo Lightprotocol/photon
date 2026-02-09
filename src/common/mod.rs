@@ -5,7 +5,10 @@ use cadence::{BufferedUdpMetricSink, QueuingMetricSink, StatsdClient};
 use cadence_macros::set_global_default;
 use clap::{Parser, ValueEnum};
 use sea_orm::{DatabaseBackend, DatabaseConnection, SqlxPostgresConnector};
-use solana_client::{nonblocking::rpc_client::RpcClient, rpc_config::RpcBlockConfig};
+use solana_client::{
+    client_error::ClientErrorKind, nonblocking::rpc_client::RpcClient, rpc_config::RpcBlockConfig,
+    rpc_request::RpcError,
+};
 use solana_commitment_config::CommitmentConfig;
 use solana_transaction_status::{TransactionDetails, UiTransactionEncoding};
 use sqlx::{
@@ -61,20 +64,72 @@ pub async fn get_genesis_hash_with_infinite_retry(rpc_client: &RpcClient) -> Str
 }
 
 pub async fn fetch_block_parent_slot(rpc_client: &RpcClient, slot: u64) -> u64 {
-    rpc_client
-        .get_block_with_config(
-            slot,
-            RpcBlockConfig {
-                encoding: Some(UiTransactionEncoding::Base64),
-                transaction_details: Some(TransactionDetails::None),
-                rewards: Some(false),
-                commitment: Some(CommitmentConfig::confirmed()),
-                max_supported_transaction_version: Some(0),
-            },
-        )
-        .await
-        .unwrap()
-        .parent_slot
+    const MAX_FORWARD_SCAN: u64 = 2048;
+    let start_slot = slot;
+    let mut probe_slot = slot;
+
+    loop {
+        let response = rpc_client
+            .get_block_with_config(
+                probe_slot,
+                RpcBlockConfig {
+                    encoding: Some(UiTransactionEncoding::Base64),
+                    transaction_details: Some(TransactionDetails::None),
+                    rewards: Some(false),
+                    commitment: Some(CommitmentConfig::confirmed()),
+                    max_supported_transaction_version: Some(0),
+                },
+            )
+            .await;
+
+        match response {
+            Ok(block) => {
+                if probe_slot != start_slot {
+                    log::warn!(
+                        "Requested start slot {} unavailable; using nearest available slot {} with parent {}",
+                        start_slot,
+                        probe_slot,
+                        block.parent_slot
+                    );
+                }
+                return block.parent_slot;
+            }
+            Err(e) => {
+                let mut should_advance_probe_slot = false;
+                if let ClientErrorKind::RpcError(RpcError::RpcResponseError {
+                    code, message, ..
+                }) = &*e.kind
+                {
+                    should_advance_probe_slot = *code == -32007
+                        || *code == -32009
+                        || message.contains("not available")
+                        || message.contains("skipped");
+                }
+
+                if should_advance_probe_slot {
+                    probe_slot = probe_slot.saturating_add(1);
+                    if probe_slot.saturating_sub(start_slot) > MAX_FORWARD_SCAN {
+                        log::warn!(
+                            "Could not find available block from slot {} after scanning {} slots. Retrying from original slot.",
+                            start_slot,
+                            MAX_FORWARD_SCAN
+                        );
+                        probe_slot = start_slot;
+                        sleep(Duration::from_secs(5));
+                    }
+                    continue;
+                }
+
+                log::error!(
+                    "Failed to fetch parent slot for probe slot {} (start slot {}): {}",
+                    probe_slot,
+                    start_slot,
+                    e
+                );
+                sleep(Duration::from_secs(5));
+            }
+        }
+    }
 }
 
 pub async fn get_network_start_slot(rpc_client: &RpcClient) -> u64 {
