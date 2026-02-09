@@ -70,9 +70,9 @@ async fn create_directory_adapter(args: &Args) -> anyhow::Result<Arc<DirectoryAd
         args.r2_bucket.clone(),
         args.gcs_bucket.clone(),
     ) {
-        (Some(snapshot_dir), None, None) => {
-            Ok(Arc::new(DirectoryAdapter::from_local_directory(snapshot_dir)))
-        }
+        (Some(snapshot_dir), None, None) => Ok(Arc::new(DirectoryAdapter::from_local_directory(
+            snapshot_dir,
+        ))),
         (None, Some(r2_bucket), None) => Ok(Arc::new(
             DirectoryAdapter::from_r2_bucket_and_prefix_and_env(r2_bucket, args.r2_prefix.clone())
                 .await,
@@ -149,10 +149,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         if iteration > args.max_iterations {
-            error!(
-                "Max iterations ({}) reached, aborting",
-                args.max_iterations
-            );
+            error!("Max iterations ({}) reached, aborting", args.max_iterations);
             return Err(anyhow::anyhow!(
                 "Failed to repair all gaps after {} iterations",
                 args.max_iterations
@@ -199,7 +196,10 @@ async fn main() -> anyhow::Result<()> {
             // Continue to next iteration - the gaps might resolve with a fresh analysis
             // or we may need to expand the search range
         } else {
-            info!("Fetched {} blocks with compression transactions", new_blocks.len());
+            info!(
+                "Fetched {} blocks with compression transactions",
+                new_blocks.len()
+            );
 
             // Load existing blocks
             info!("Loading existing blocks from snapshot...");

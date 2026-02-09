@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use futures::{stream, StreamExt};
 use log::info;
-use solana_client::{nonblocking::rpc_client::RpcClient, rpc_config::RpcBlockConfig, rpc_request::RpcError};
+use solana_client::{
+    nonblocking::rpc_client::RpcClient, rpc_config::RpcBlockConfig, rpc_request::RpcError,
+};
 use solana_commitment_config::CommitmentConfig;
 use solana_transaction_status::{TransactionDetails, UiTransactionEncoding};
 

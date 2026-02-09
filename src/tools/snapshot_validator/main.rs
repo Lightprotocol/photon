@@ -165,7 +165,9 @@ fn extract_sequences_from_merkle_event(
             }
             result
         }
-        MerkleTreeEvent::BatchAppend(batch) | MerkleTreeEvent::BatchNullify(batch) | MerkleTreeEvent::BatchAddressAppend(batch) => {
+        MerkleTreeEvent::BatchAppend(batch)
+        | MerkleTreeEvent::BatchNullify(batch)
+        | MerkleTreeEvent::BatchAddressAppend(batch) => {
             let tree = Pubkey::new_from_array(batch.merkle_tree_pubkey);
             let source = match event {
                 MerkleTreeEvent::BatchAppend(_) => "BatchAppend",
@@ -214,10 +216,7 @@ fn extract_sequences_from_transaction(
         ordered_instructions.extend(instruction_group.inner_instructions.iter());
 
         // Try V2 parsing first
-        let program_ids: Vec<Pubkey> = ordered_instructions
-            .iter()
-            .map(|i| i.program_id)
-            .collect();
+        let program_ids: Vec<Pubkey> = ordered_instructions.iter().map(|i| i.program_id).collect();
         let instruction_data: Vec<Vec<u8>> = ordered_instructions
             .iter()
             .map(|i| i.data.clone())
@@ -227,10 +226,16 @@ fn extract_sequences_from_transaction(
             .map(|i| i.accounts.clone())
             .collect();
 
-        if let Some(events) = parse_public_transaction_event_v2(&program_ids, &instruction_data, accounts) {
+        if let Some(events) =
+            parse_public_transaction_event_v2(&program_ids, &instruction_data, accounts)
+        {
             for event in events {
                 // Extract from V1 event embedded in V2
-                sequences.extend(extract_sequences_from_v1_event(&event.event, slot, &signature));
+                sequences.extend(extract_sequences_from_v1_event(
+                    &event.event,
+                    slot,
+                    &signature,
+                ));
 
                 // Extract from V2 input sequence numbers
                 for seq in &event.input_sequence_numbers {
@@ -267,10 +272,14 @@ fn extract_sequences_from_transaction(
                 if instruction.program_id == NOOP_PROGRAM_ID {
                     // Try to parse as MerkleTreeEvent
                     if let Some(event) = try_parse_merkle_tree_event(&instruction.data) {
-                        sequences.extend(extract_sequences_from_merkle_event(&event, slot, &signature));
+                        sequences.extend(extract_sequences_from_merkle_event(
+                            &event, slot, &signature,
+                        ));
                     }
                     // Try to parse as PublicTransactionEvent
-                    else if let Some(event) = try_parse_public_transaction_event(&instruction.data) {
+                    else if let Some(event) =
+                        try_parse_public_transaction_event(&instruction.data)
+                    {
                         sequences.extend(extract_sequences_from_v1_event(&event, slot, &signature));
                     }
                 }
@@ -279,10 +288,17 @@ fn extract_sequences_from_transaction(
                 if instruction.program_id == get_compression_program_id() {
                     if let Some(next_instruction) = ordered_instructions.get(index + 1) {
                         if next_instruction.program_id == NOOP_PROGRAM_ID {
-                            if let Some(event) = try_parse_merkle_tree_event(&next_instruction.data) {
-                                sequences.extend(extract_sequences_from_merkle_event(&event, slot, &signature));
-                            } else if let Some(event) = try_parse_public_transaction_event(&next_instruction.data) {
-                                sequences.extend(extract_sequences_from_v1_event(&event, slot, &signature));
+                            if let Some(event) = try_parse_merkle_tree_event(&next_instruction.data)
+                            {
+                                sequences.extend(extract_sequences_from_merkle_event(
+                                    &event, slot, &signature,
+                                ));
+                            } else if let Some(event) =
+                                try_parse_public_transaction_event(&next_instruction.data)
+                            {
+                                sequences.extend(extract_sequences_from_v1_event(
+                                    &event, slot, &signature,
+                                ));
                             }
                         }
                     }
@@ -414,10 +430,7 @@ async fn main() -> anyhow::Result<()> {
                 total_sequences += sequences.len() as u64;
 
                 for (tree, occurrence) in sequences {
-                    sequences_by_tree
-                        .entry(tree)
-                        .or_default()
-                        .push(occurrence);
+                    sequences_by_tree.entry(tree).or_default().push(occurrence);
                 }
             }
 

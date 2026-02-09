@@ -367,7 +367,9 @@ pub struct DirectoryAdapter {
 impl DirectoryAdapter {
     pub fn from_local_directory(snapshot_dir: String) -> Self {
         Self {
-            filesystem_directory_adapter: Some(Arc::new(FileSystemDirectoryApapter { snapshot_dir })),
+            filesystem_directory_adapter: Some(Arc::new(FileSystemDirectoryApapter {
+                snapshot_dir,
+            })),
             r2_directory_adapter: None,
             #[cfg(feature = "gcs")]
             gcs_directory_adapter: None,

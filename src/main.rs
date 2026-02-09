@@ -197,6 +197,24 @@ fn continously_index_new_blocks(
     })
 }
 
+async fn sync_tree_metadata_or_exit(
+    rpc_client: Arc<RpcClient>,
+    db_conn: Arc<DatabaseConnection>,
+    reason: &str,
+) {
+    info!("Syncing tree metadata from on-chain ({})...", reason);
+    if let Err(e) = photon_indexer::monitor::tree_metadata_sync::sync_tree_metadata(
+        rpc_client.as_ref(),
+        db_conn.as_ref(),
+    )
+    .await
+    {
+        error!("Failed to sync tree metadata: {}. Cannot continue.", e);
+        std::process::exit(1);
+    }
+    info!("Tree metadata sync completed successfully");
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -247,6 +265,7 @@ async fn main() {
         }
     };
 
+    let mut has_synced_tree_metadata = false;
     if let Some(directory_adapter) = directory_adapter {
         let snapshot_files = get_snapshot_files_with_metadata(&directory_adapter)
             .await
@@ -254,21 +273,13 @@ async fn main() {
         if !snapshot_files.is_empty() {
             // Sync tree metadata from on-chain before processing snapshot
             // This is REQUIRED so the indexer knows about all existing trees
-            info!("Syncing tree metadata from on-chain before loading snapshot...");
-            if let Err(e) = photon_indexer::monitor::tree_metadata_sync::sync_tree_metadata(
-                rpc_client.as_ref(),
-                db_conn.as_ref(),
+            sync_tree_metadata_or_exit(
+                rpc_client.clone(),
+                db_conn.clone(),
+                "before loading snapshot",
             )
-            .await
-            {
-                error!(
-                    "Failed to sync tree metadata: {}. Cannot proceed with snapshot loading.",
-                    e
-                );
-                error!("Tree metadata must be synced before loading snapshots to avoid skipping transactions.");
-                std::process::exit(1);
-            }
-            info!("Tree metadata sync completed successfully");
+            .await;
+            has_synced_tree_metadata = true;
 
             info!("Detected snapshot files. Loading snapshot...");
             let last_slot = snapshot_files.last().unwrap().end_slot;
@@ -300,6 +311,14 @@ async fn main() {
             (None, None)
         }
         false => {
+            if !has_synced_tree_metadata {
+                sync_tree_metadata_or_exit(
+                    rpc_client.clone(),
+                    db_conn.clone(),
+                    "before starting indexer",
+                )
+                .await;
+            }
             info!("Starting indexer...");
             // For localnet we can safely use a large batch size to speed up indexing.
             let max_concurrent_block_fetches = match args.max_concurrent_block_fetches {

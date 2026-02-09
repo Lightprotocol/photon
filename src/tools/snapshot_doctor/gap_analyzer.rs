@@ -187,10 +187,7 @@ pub fn extract_sequences_from_transaction(
         ordered_instructions.push(&instruction_group.outer_instruction);
         ordered_instructions.extend(instruction_group.inner_instructions.iter());
 
-        let program_ids: Vec<Pubkey> = ordered_instructions
-            .iter()
-            .map(|i| i.program_id)
-            .collect();
+        let program_ids: Vec<Pubkey> = ordered_instructions.iter().map(|i| i.program_id).collect();
         let instruction_data: Vec<Vec<u8>> = ordered_instructions
             .iter()
             .map(|i| i.data.clone())
@@ -240,8 +237,9 @@ pub fn extract_sequences_from_transaction(
             for (index, instruction) in ordered_instructions.iter().enumerate() {
                 if instruction.program_id == NOOP_PROGRAM_ID {
                     if let Some(event) = try_parse_merkle_tree_event(&instruction.data) {
-                        sequences
-                            .extend(extract_sequences_from_merkle_event(&event, slot, &signature));
+                        sequences.extend(extract_sequences_from_merkle_event(
+                            &event, slot, &signature,
+                        ));
                     } else if let Some(event) =
                         try_parse_public_transaction_event(&instruction.data)
                     {
@@ -289,10 +287,7 @@ fn analyze_sequences_with_slot_tracking(
         }
 
         // Build a map of sequence -> slot for looking up previous sequence slots
-        let seq_to_slot: HashMap<u64, u64> = occurrences
-            .iter()
-            .map(|o| (o.seq, o.slot))
-            .collect();
+        let seq_to_slot: HashMap<u64, u64> = occurrences.iter().map(|o| (o.seq, o.slot)).collect();
 
         let mut expected_seq = occurrences[0].seq;
         for occurrence in &occurrences {
