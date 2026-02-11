@@ -27,6 +27,7 @@ pub mod fetchers;
 pub mod indexer;
 pub mod parser;
 pub mod persist;
+pub mod signature_indexer;
 pub mod typedefs;
 
 async fn derive_block_state_update(
