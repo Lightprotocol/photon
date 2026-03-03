@@ -12,7 +12,3 @@ pub const ACCOUNT_TYPE_MINT: u8 = 1;
 pub const LIGHT_MINT_PDA_OFFSET: usize = 84;
 pub const LIGHT_MINT_PDA_LEN: usize = 32;
 pub const LIGHT_MINT_PDA_END: usize = LIGHT_MINT_PDA_OFFSET + LIGHT_MINT_PDA_LEN;
-/// 1-indexed equivalents for SQL substring functions.
-pub const TOKEN_ACCOUNT_TYPE_OFFSET_SQL: usize = TOKEN_ACCOUNT_TYPE_OFFSET + 1;
-pub const COMPRESSED_MINT_PDA_OFFSET_SQL: usize = LIGHT_MINT_PDA_OFFSET + 1;
-pub const COMPRESSED_MINT_PDA_LEN: usize = LIGHT_MINT_PDA_LEN;
