@@ -39,12 +39,21 @@ pub async fn persist_batch_events(
         })?;
         let tree_height = tree_info.height;
         // Sort by sequence
-        events.sort_by(|a, b| a.0.cmp(&b.0));
+        events.sort_by_key(|event| event.sequence_number);
 
         let tree_name = bs58::encode(tree_pubkey).into_string();
-        let sequences_before: Vec<u64> = events.iter().map(|(seq, _)| *seq).collect();
+        let sequences_before: Vec<(u64, String, u64)> = events
+            .iter()
+            .map(|event| {
+                (
+                    event.sequence_number,
+                    event.signature.to_string(),
+                    event.slot,
+                )
+            })
+            .collect();
         debug!(
-            "Processing tree: {:?} with {} events, sequences: {:?}",
+            "Processing tree: {:?} with {} events, (sequence, tx, slot): {:?}",
             tree_name,
             events.len(),
             sequences_before
@@ -58,30 +67,32 @@ pub async fn persist_batch_events(
         deduplicate_events(events);
 
         // Process each event in sequence
-        for (_event_seq, event) in events.iter() {
+        for event in events.iter() {
             // Batch size is 500 for batched State Merkle trees.
             let mut leaf_nodes = Vec::with_capacity(ZKP_BATCH_SIZE);
             // Check if we should process this event (idempotency check)
-            let should_process = match event {
-                MerkleTreeEvent::BatchNullify(e)
-                | MerkleTreeEvent::BatchAppend(e)
-                | MerkleTreeEvent::BatchAddressAppend(e) => should_process_event(txn, e).await?,
+            let should_process = match &event.event {
+                MerkleTreeEvent::BatchNullify(_)
+                | MerkleTreeEvent::BatchAppend(_)
+                | MerkleTreeEvent::BatchAddressAppend(_) => {
+                    should_process_event(txn, event).await?
+                }
                 _ => return Err(IngesterError::InvalidEvent),
             };
 
             if !should_process {
                 debug!(
-                    "Skipping already processed event with sequence {}",
-                    _event_seq
+                    "Skipping already processed event with sequence {} from tx {} at slot {}",
+                    event.sequence_number, event.signature, event.slot
                 );
-                if let MerkleTreeEvent::BatchAddressAppend(batch_event) = event {
+                if let MerkleTreeEvent::BatchAddressAppend(batch_event) = &event.event {
                     let queue_end = (batch_event.new_next_index as i64) - 1;
                     cleanup_stale_address_queue_entries(txn, batch_event, queue_end).await?;
                 }
                 continue;
             }
 
-            match event {
+            match &event.event {
                 MerkleTreeEvent::BatchNullify(batch_nullify_event) => {
                     persist_batch_nullify_event(txn, batch_nullify_event, &mut leaf_nodes).await
                 }

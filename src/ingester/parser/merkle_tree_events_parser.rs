@@ -16,12 +16,21 @@ use solana_signature::Signature;
 
 /// A map of merkle tree events and sequence numbers by merkle tree pubkey.
 /// We keep sequence number to order the events.
-pub type BatchMerkleTreeEvents = HashMap<[u8; 32], Vec<(u64, MerkleTreeEvent)>>;
+pub type BatchMerkleTreeEvents = HashMap<[u8; 32], Vec<BatchMerkleTreeEvent>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchMerkleTreeEvent {
+    pub sequence_number: u64,
+    pub signature: Signature,
+    pub slot: u64,
+    pub event: MerkleTreeEvent,
+}
 
 pub fn parse_merkle_tree_event(
     instruction: &Instruction,
     next_instruction: &Instruction,
     tx: &TransactionInfo,
+    slot: u64,
 ) -> Result<Option<StateUpdate>, IngesterError> {
     if get_compression_program_id() == instruction.program_id
         && next_instruction.program_id == NOOP_PROGRAM_ID
@@ -42,10 +51,12 @@ pub fn parse_merkle_tree_event(
                         .batch_merkle_tree_events
                         .entry(batch_event.merkle_tree_pubkey)
                         .or_default()
-                        .push((
-                            batch_event.sequence_number,
-                            MerkleTreeEvent::BatchAppend(batch_event),
-                        ));
+                        .push(BatchMerkleTreeEvent {
+                            sequence_number: batch_event.sequence_number,
+                            signature: tx.signature,
+                            slot,
+                            event: MerkleTreeEvent::BatchAppend(batch_event),
+                        });
                     state_update
                 }
                 MerkleTreeEvent::BatchNullify(batch_event) => {
@@ -53,10 +64,12 @@ pub fn parse_merkle_tree_event(
                         .batch_merkle_tree_events
                         .entry(batch_event.merkle_tree_pubkey)
                         .or_default()
-                        .push((
-                            batch_event.sequence_number,
-                            MerkleTreeEvent::BatchNullify(batch_event),
-                        ));
+                        .push(BatchMerkleTreeEvent {
+                            sequence_number: batch_event.sequence_number,
+                            signature: tx.signature,
+                            slot,
+                            event: MerkleTreeEvent::BatchNullify(batch_event),
+                        });
                     state_update
                 }
                 MerkleTreeEvent::BatchAddressAppend(batch_event) => {
@@ -64,10 +77,12 @@ pub fn parse_merkle_tree_event(
                         .batch_merkle_tree_events
                         .entry(batch_event.merkle_tree_pubkey)
                         .or_default()
-                        .push((
-                            batch_event.sequence_number,
-                            MerkleTreeEvent::BatchAddressAppend(batch_event),
-                        ));
+                        .push(BatchMerkleTreeEvent {
+                            sequence_number: batch_event.sequence_number,
+                            signature: tx.signature,
+                            slot,
+                            event: MerkleTreeEvent::BatchAddressAppend(batch_event),
+                        });
                     state_update
                 }
                 _ => Err(IngesterError::ParserError(

@@ -3,23 +3,38 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, Q
 
 use crate::dao::generated::state_trees;
 use crate::ingester::error::IngesterError;
-use crate::ingester::parser::indexer_events::BatchEvent;
+use crate::ingester::parser::{
+    indexer_events::MerkleTreeEvent, merkle_tree_events_parser::BatchMerkleTreeEvent,
+};
 
 /// Checks if an event should be processed based on its sequence number.
 /// Returns Ok(true) if the event should be processed, Ok(false) if it should be skipped.
 pub async fn should_process_event(
     txn: &DatabaseTransaction,
-    event: &BatchEvent,
+    event: &BatchMerkleTreeEvent,
 ) -> Result<bool, IngesterError> {
+    let tree_pubkey = match &event.event {
+        MerkleTreeEvent::BatchNullify(batch_event)
+        | MerkleTreeEvent::BatchAppend(batch_event)
+        | MerkleTreeEvent::BatchAddressAppend(batch_event) => &batch_event.merkle_tree_pubkey,
+        _ => {
+            return Err(IngesterError::ParserError(
+                "Expected batched merkle tree event".to_string(),
+            ));
+        }
+    };
+
     // Get the current sequence number for this tree
-    let current_sequence = get_current_tree_sequence(txn, &event.merkle_tree_pubkey).await?;
+    let current_sequence = get_current_tree_sequence(txn, tree_pubkey).await?;
 
     if event.sequence_number <= current_sequence {
         debug!(
-            "Skipping event: tree {} already at sequence {} (event sequence: {})",
-            bs58::encode(&event.merkle_tree_pubkey).into_string(),
+            "Skipping event: tree {} already at sequence {} (event sequence: {}, tx: {}, slot: {})",
+            bs58::encode(tree_pubkey).into_string(),
             current_sequence,
-            event.sequence_number
+            event.sequence_number,
+            event.signature,
+            event.slot
         );
         return Ok(false);
     }
@@ -27,10 +42,12 @@ pub async fn should_process_event(
     // Check for sequence gaps - we should process events in order
     if event.sequence_number > current_sequence + 1 {
         return Err(IngesterError::ParserError(format!(
-            "Sequence gap detected: tree {} is at sequence {}, but received event with sequence {}",
-            bs58::encode(&event.merkle_tree_pubkey).into_string(),
+            "Sequence gap detected: tree {} is at sequence {}, but received event with sequence {} from tx {} at slot {}",
+            bs58::encode(tree_pubkey).into_string(),
             current_sequence,
-            event.sequence_number
+            event.sequence_number,
+            event.signature,
+            event.slot
         )));
     }
 

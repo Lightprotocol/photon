@@ -108,9 +108,7 @@ pub fn continously_monitor_photon(
 
                     tokio::spawn(async move {
                         let _validation_guard = TreeValidationGuard;
-                        let tree_roots =
-                            load_db_tree_roots_with_infinite_retry(db_clone.as_ref()).await;
-                        validate_tree_roots(rpc_clone.as_ref(), tree_roots).await;
+                        validate_tree_roots(rpc_clone.as_ref(), db_clone.as_ref()).await;
                     });
                 }
 
@@ -196,50 +194,6 @@ fn parse_historical_roots(account: SolanaAccount) -> Vec<Hash> {
     extract_roots(concurrent_tree.roots.as_slice())
 }
 
-async fn load_db_tree_roots_with_infinite_retry(db: &DatabaseConnection) -> Vec<(Pubkey, Hash)> {
-    loop {
-        let models = state_trees::Entity::find()
-            .filter(state_trees::Column::NodeIdx.eq(1))
-            .all(db)
-            .await;
-        match models {
-            Ok(models) => {
-                // Filter to only include trees that exist in tree_metadata
-                // (which already filters by EXPECTED_TREE_OWNER during sync).
-                // This avoids root mismatch errors for unknown/external trees.
-                let known_trees = {
-                    use crate::dao::generated::tree_metadata;
-                    match tree_metadata::Entity::find().all(db).await {
-                        Ok(metadata) => metadata
-                            .into_iter()
-                            .map(|m| m.tree_pubkey)
-                            .collect::<std::collections::HashSet<_>>(),
-                        Err(e) => {
-                            log::error!("Error loading tree metadata: {}", e);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                            continue;
-                        }
-                    }
-                };
-                return models
-                    .iter()
-                    .filter(|model| known_trees.contains(&model.tree))
-                    .map(|model| {
-                        (
-                            Pubkey::try_from(model.tree.clone()).unwrap(),
-                            Hash::try_from(model.hash.clone()).unwrap(),
-                        )
-                    })
-                    .collect();
-            }
-            Err(e) => {
-                log::error!("Error loading tree roots: {}", e);
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            }
-        }
-    }
-}
-
 async fn load_accounts_with_infinite_retry(
     rpc_client: &RpcClient,
     pubkeys: Vec<Pubkey>,
@@ -258,11 +212,16 @@ async fn load_accounts_with_infinite_retry(
     }
 }
 
-async fn validate_tree_roots(rpc_client: &RpcClient, db_roots: Vec<(Pubkey, Hash)>) {
-    for chunk in db_roots.chunks(CHUNK_SIZE) {
-        let pubkeys = chunk.iter().map(|(pubkey, _)| *pubkey).collect();
-        let accounts = load_accounts_with_infinite_retry(rpc_client, pubkeys).await;
-        for ((pubkey, db_hash), account) in chunk.iter().zip(accounts) {
+async fn validate_tree_roots(rpc_client: &RpcClient, db: &DatabaseConnection) {
+    let tree_pubkeys = load_tree_pubkeys_with_infinite_retry(db).await;
+
+    for chunk in tree_pubkeys.chunks(CHUNK_SIZE) {
+        // Fetch on-chain accounts first (slow RPC call)
+        let accounts = load_accounts_with_infinite_retry(rpc_client, chunk.to_vec()).await;
+        // Then load DB roots (fast local read) to minimize the window
+        let db_roots = load_db_roots_for_pubkeys(db, chunk).await;
+
+        for ((pubkey, db_hash), account) in db_roots.iter().zip(accounts) {
             if let Some(account) = account {
                 let account_roots = parse_historical_roots(account);
                 if !account_roots.contains(db_hash) {
@@ -280,4 +239,67 @@ async fn validate_tree_roots(rpc_client: &RpcClient, db_roots: Vec<(Pubkey, Hash
     metric! {
         statsd_count!("root_validation_success", 1);
     }
+}
+
+async fn load_tree_pubkeys_with_infinite_retry(db: &DatabaseConnection) -> Vec<Pubkey> {
+    loop {
+        let known_trees = {
+            use crate::dao::generated::tree_metadata;
+            match tree_metadata::Entity::find().all(db).await {
+                Ok(metadata) => metadata
+                    .into_iter()
+                    .map(|m| m.tree_pubkey)
+                    .collect::<std::collections::HashSet<_>>(),
+                Err(e) => {
+                    log::error!("Error loading tree metadata: {}", e);
+                    sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            }
+        };
+
+        match state_trees::Entity::find()
+            .filter(state_trees::Column::NodeIdx.eq(1))
+            .all(db)
+            .await
+        {
+            Ok(models) => {
+                return models
+                    .iter()
+                    .filter(|m| known_trees.contains(&m.tree))
+                    .filter_map(|m| Pubkey::try_from(m.tree.clone()).ok())
+                    .collect();
+            }
+            Err(e) => {
+                log::error!("Error loading tree roots: {}", e);
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+async fn load_db_roots_for_pubkeys(
+    db: &DatabaseConnection,
+    pubkeys: &[Pubkey],
+) -> Vec<(Pubkey, Hash)> {
+    let tree_bytes: Vec<Vec<u8>> = pubkeys.iter().map(|p| p.to_bytes().to_vec()).collect();
+    let models = state_trees::Entity::find()
+        .filter(state_trees::Column::NodeIdx.eq(1))
+        .filter(state_trees::Column::Tree.is_in(tree_bytes))
+        .all(db)
+        .await
+        .unwrap_or_default();
+
+    // Return in the same order as pubkeys
+    pubkeys
+        .iter()
+        .map(|pubkey| {
+            let hash = models
+                .iter()
+                .find(|m| m.tree == pubkey.to_bytes().to_vec())
+                .and_then(|m| Hash::try_from(m.hash.clone()).ok())
+                .unwrap_or_default();
+            (*pubkey, hash)
+        })
+        .collect()
 }

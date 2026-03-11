@@ -142,6 +142,7 @@ where
                         &ordered_instructions[index],
                         &ordered_instructions[index + 1],
                         tx,
+                        slot,
                     )? {
                         is_compression_transaction = true;
                         state_updates.push(state_update);

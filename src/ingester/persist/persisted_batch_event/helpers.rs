@@ -4,7 +4,7 @@ use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::dao::generated::accounts;
 use crate::ingester::error::IngesterError;
-use crate::ingester::parser::indexer_events::MerkleTreeEvent;
+use crate::ingester::parser::merkle_tree_events_parser::BatchMerkleTreeEvent;
 use crate::ingester::persist::leaf_node::{persist_leaf_nodes, LeafNode};
 use crate::ingester::persist::MAX_SQL_INSERTS;
 use log::{debug, warn};
@@ -82,13 +82,16 @@ pub fn create_account_leaf_node(
 }
 
 /// Deduplicates events by sequence number, keeping first occurrence
-pub fn deduplicate_events(events: &mut Vec<(u64, MerkleTreeEvent)>) {
+pub fn deduplicate_events(events: &mut Vec<BatchMerkleTreeEvent>) {
     let mut seen = HashSet::new();
     let original_count = events.len();
 
-    events.retain(|(seq, _)| {
-        if !seen.insert(*seq) {
-            warn!("Skipping duplicate event with sequence {}", seq);
+    events.retain(|event| {
+        if !seen.insert(event.sequence_number) {
+            warn!(
+                "Skipping duplicate event with sequence {} from tx {} at slot {}",
+                event.sequence_number, event.signature, event.slot
+            );
             false
         } else {
             true
