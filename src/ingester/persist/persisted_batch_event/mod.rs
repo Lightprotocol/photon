@@ -75,7 +75,7 @@ pub async fn persist_batch_events(
                 MerkleTreeEvent::BatchNullify(_)
                 | MerkleTreeEvent::BatchAppend(_)
                 | MerkleTreeEvent::BatchAddressAppend(_) => {
-                    should_process_event(txn, event).await?
+                    should_process_event(txn, event, events).await?
                 }
                 _ => return Err(IngesterError::InvalidEvent),
             };

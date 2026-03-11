@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, error};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, Set};
 
 use crate::dao::generated::state_trees;
@@ -12,6 +12,7 @@ use crate::ingester::parser::{
 pub async fn should_process_event(
     txn: &DatabaseTransaction,
     event: &BatchMerkleTreeEvent,
+    tree_events: &[BatchMerkleTreeEvent],
 ) -> Result<bool, IngesterError> {
     let tree_pubkey = match &event.event {
         MerkleTreeEvent::BatchNullify(batch_event)
@@ -41,13 +42,33 @@ pub async fn should_process_event(
 
     // Check for sequence gaps - we should process events in order
     if event.sequence_number > current_sequence + 1 {
-        return Err(IngesterError::ParserError(format!(
-            "Sequence gap detected: tree {} is at sequence {}, but received event with sequence {} from tx {} at slot {}",
+        let batch_event_summary: Vec<(u64, String, u64)> = tree_events
+            .iter()
+            .map(|event| {
+                (
+                    event.sequence_number,
+                    event.signature.to_string(),
+                    event.slot,
+                )
+            })
+            .collect();
+        error!(
+            "Sequence gap detected for tree {}: current sequence={}, received sequence={}, tx={}, slot={}, batch events (sequence, tx, slot)={:?}",
             bs58::encode(tree_pubkey).into_string(),
             current_sequence,
             event.sequence_number,
             event.signature,
-            event.slot
+            event.slot,
+            batch_event_summary
+        );
+        return Err(IngesterError::ParserError(format!(
+            "Sequence gap detected: tree {} is at sequence {}, but received event with sequence {} from tx {} at slot {}. Batch events (sequence, tx, slot): {:?}",
+            bs58::encode(tree_pubkey).into_string(),
+            current_sequence,
+            event.sequence_number,
+            event.signature,
+            event.slot,
+            batch_event_summary
         )));
     }
 
