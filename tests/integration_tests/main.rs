@@ -6,6 +6,7 @@ mod batch_append_nullified_test;
 mod batched_address_tree_tests;
 mod batched_state_tree_tests;
 mod e2e_tests;
+mod forester_dump_repro_test;
 mod interface_tests;
 mod merkle_tree_deserialization;
 mod mock_tests;

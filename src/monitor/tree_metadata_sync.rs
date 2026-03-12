@@ -21,6 +21,56 @@ pub struct TreeAccountData {
     pub owner: Pubkey,
 }
 
+pub fn parse_tree_account_data(
+    pubkey: Pubkey,
+    account: &Account,
+) -> Result<Option<(TreeType, TreeAccountData)>, PhotonApiError> {
+    if let Ok(data) = process_v1_state_account(account) {
+        return Ok(Some((TreeType::StateV1, data)));
+    }
+
+    if let Ok(data) = process_v1_address_account(account) {
+        return Ok(Some((TreeType::AddressV1, data)));
+    }
+
+    let light_pubkey = light_compressed_account::pubkey::Pubkey::new_from_array(pubkey.to_bytes());
+    if let Ok(tree_account) =
+        BatchedMerkleTreeAccount::state_from_bytes(&mut account.data.clone(), &light_pubkey)
+    {
+        let metadata = tree_account.get_metadata();
+        return Ok(Some((
+            TreeType::StateV2,
+            TreeAccountData {
+                queue_pubkey: Pubkey::new_from_array(metadata.metadata.associated_queue.to_bytes()),
+                root_history_capacity: metadata.root_history_capacity as usize,
+                height: tree_account.height,
+                sequence_number: metadata.sequence_number,
+                next_index: metadata.next_index,
+                owner: Pubkey::new_from_array(metadata.metadata.access_metadata.owner.to_bytes()),
+            },
+        )));
+    }
+
+    if let Ok(tree_account) =
+        BatchedMerkleTreeAccount::address_from_bytes(&mut account.data.clone(), &light_pubkey)
+    {
+        let metadata = tree_account.get_metadata();
+        return Ok(Some((
+            TreeType::AddressV2,
+            TreeAccountData {
+                queue_pubkey: pubkey,
+                root_history_capacity: metadata.root_history_capacity as usize,
+                height: tree_account.height,
+                sequence_number: metadata.sequence_number,
+                next_index: metadata.next_index,
+                owner: Pubkey::new_from_array(metadata.metadata.access_metadata.owner.to_bytes()),
+            },
+        )));
+    }
+
+    Ok(None)
+}
+
 fn check_tree_owner(owner: &Pubkey) -> bool {
     match EXPECTED_TREE_OWNER {
         Some(expected_owner) => {
@@ -87,109 +137,47 @@ pub async fn process_tree_account<C>(
 where
     C: ConnectionTrait,
 {
-    if let Ok(data) = process_v1_state_account(account) {
-        if !check_tree_owner(&data.owner) {
-            debug!(
-                "Skipping V1 state tree {} - owner {} does not match expected owner",
-                pubkey, data.owner
-            );
-            return Ok(false);
-        }
+    let Some((tree_type, data)) = parse_tree_account_data(pubkey, account)? else {
+        debug!("Account {} is not a recognized tree type", pubkey);
+        return Ok(false);
+    };
 
+    if !check_tree_owner(&data.owner) {
         debug!(
-            "Parsed as V1 state tree: {} (queue={}, owner={})",
-            pubkey, data.queue_pubkey, data.owner
+            "Skipping {:?} tree {} - owner {} does not match expected owner",
+            tree_type, pubkey, data.owner
         );
-        upsert_tree_metadata(db, pubkey, TreeType::StateV1, &data, slot).await?;
-        info!(
-            "Synced V1 state tree {} with height {}, root_history_capacity {}, seq {}, next_idx {}",
-            pubkey, data.height, data.root_history_capacity, data.sequence_number, data.next_index
-        );
-        return Ok(true);
+        return Ok(false);
     }
 
-    if let Ok(data) = process_v1_address_account(account) {
-        if !check_tree_owner(&data.owner) {
-            debug!(
-                "Skipping V1 address tree {} - owner {} does not match expected owner",
-                pubkey, data.owner
+    debug!(
+        "Parsed as {:?} tree: {} (queue={}, owner={})",
+        tree_type, pubkey, data.queue_pubkey, data.owner
+    );
+    upsert_tree_metadata(db, pubkey, tree_type, &data, slot).await?;
+
+    match tree_type {
+        TreeType::StateV1 | TreeType::AddressV1 => {
+            info!(
+                "Synced {:?} tree {} with height {}, root_history_capacity {}, seq {}, next_idx {}",
+                tree_type,
+                pubkey,
+                data.height,
+                data.root_history_capacity,
+                data.sequence_number,
+                data.next_index
             );
-            return Ok(false);
         }
-
-        upsert_tree_metadata(db, pubkey, TreeType::AddressV1, &data, slot).await?;
-        info!("Synced V1 address tree {} with height {}, root_history_capacity {}, seq {}, next_idx {}",
-            pubkey, data.height, data.root_history_capacity, data.sequence_number, data.next_index);
-        return Ok(true);
-    }
-
-    let light_pubkey = light_compressed_account::pubkey::Pubkey::new_from_array(pubkey.to_bytes());
-    if let Ok(tree_account) =
-        BatchedMerkleTreeAccount::state_from_bytes(&mut account.data.clone(), &light_pubkey)
-    {
-        let metadata = tree_account.get_metadata();
-        let data = TreeAccountData {
-            queue_pubkey: Pubkey::new_from_array(metadata.metadata.associated_queue.to_bytes()),
-            root_history_capacity: metadata.root_history_capacity as usize,
-            height: tree_account.height,
-            sequence_number: metadata.sequence_number,
-            next_index: metadata.next_index,
-            owner: Pubkey::new_from_array(metadata.metadata.access_metadata.owner.to_bytes()),
-        };
-
-        if !check_tree_owner(&data.owner) {
-            debug!(
-                "Skipping V2 state tree {} - owner {} does not match expected owner",
-                pubkey, data.owner
+        TreeType::StateV2 | TreeType::AddressV2 => {
+            info!(
+                "Synced {:?} tree {} with root_history_capacity {}",
+                tree_type, pubkey, data.root_history_capacity
             );
-            return Ok(false);
         }
-
-        debug!(
-            "Parsed as V2 state tree: {} (queue={}, owner={})",
-            pubkey, data.queue_pubkey, data.owner
-        );
-        upsert_tree_metadata(db, pubkey, TreeType::StateV2, &data, slot).await?;
-
-        info!(
-            "Synced V2 state tree {} with root_history_capacity {}",
-            pubkey, data.root_history_capacity
-        );
-        return Ok(true);
+        _ => {}
     }
 
-    if let Ok(tree_account) =
-        BatchedMerkleTreeAccount::address_from_bytes(&mut account.data.clone(), &light_pubkey)
-    {
-        let metadata = tree_account.get_metadata();
-        let data = TreeAccountData {
-            queue_pubkey: pubkey, // For V2 address trees, queue == tree
-            root_history_capacity: metadata.root_history_capacity as usize,
-            height: tree_account.height,
-            sequence_number: metadata.sequence_number,
-            next_index: metadata.next_index,
-            owner: Pubkey::new_from_array(metadata.metadata.access_metadata.owner.to_bytes()),
-        };
-
-        if !check_tree_owner(&data.owner) {
-            debug!(
-                "Skipping V2 address tree {} - owner {} does not match expected owner",
-                pubkey, data.owner
-            );
-            return Ok(false);
-        }
-
-        upsert_tree_metadata(db, pubkey, TreeType::AddressV2, &data, slot).await?;
-
-        info!(
-            "Synced V2 address tree {} with root_history_capacity {}",
-            pubkey, data.root_history_capacity
-        );
-        return Ok(true);
-    }
-
-    debug!("Account {} is not a recognized tree type", pubkey);
-    Ok(false)
+    Ok(true)
 }
 
 fn process_v1_state_account(account: &Account) -> Result<TreeAccountData, PhotonApiError> {
