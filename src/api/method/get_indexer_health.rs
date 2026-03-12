@@ -1,7 +1,7 @@
 use sea_orm::DatabaseConnection;
 
 use super::super::error::PhotonApiError;
-use crate::common::typedefs::context::Context;
+use crate::common::{indexing_commitment, typedefs::context::Context};
 use solana_client::nonblocking::rpc_client::RpcClient;
 
 // TODO: Make this an environment variable.
@@ -14,7 +14,7 @@ pub async fn get_indexer_health(
 ) -> Result<String, PhotonApiError> {
     let context = Context::extract(conn).await?;
     let slot = rpc
-        .get_slot()
+        .get_slot_with_commitment(indexing_commitment())
         .await
         .map_err(|e| PhotonApiError::UnexpectedError(format!("RPC error: {}", e)))?;
 

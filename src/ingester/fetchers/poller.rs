@@ -10,10 +10,10 @@ use solana_client::{
     nonblocking::rpc_client::RpcClient, rpc_config::RpcBlockConfig, rpc_request::RpcError,
 };
 
-use solana_commitment_config::CommitmentConfig;
 use solana_transaction_status::{TransactionDetails, UiTransactionEncoding};
 
 use crate::{
+    common::indexing_commitment,
     ingester::typedefs::block_info::{parse_ui_confirmed_blocked, BlockInfo},
     metric,
     monitor::{start_latest_slot_updater, LATEST_SLOT},
@@ -104,7 +104,7 @@ pub async fn fetch_block_with_infinite_retries(
                     encoding: Some(UiTransactionEncoding::Base64),
                     transaction_details: Some(TransactionDetails::Full),
                     rewards: None,
-                    commitment: Some(CommitmentConfig::confirmed()),
+                    commitment: Some(indexing_commitment()),
                     max_supported_transaction_version: Some(0),
                 },
             )

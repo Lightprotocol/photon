@@ -9,8 +9,9 @@ use log::{error, info, warn};
 use photon_indexer::api::{self, api::PhotonApi};
 
 use photon_indexer::common::{
-    fetch_block_parent_slot, fetch_current_slot_with_infinite_retry, get_network_start_slot,
-    get_rpc_client, setup_logging, setup_metrics, setup_pg_pool, LoggingFormat,
+    fetch_block_parent_slot, fetch_current_slot_with_infinite_retry, get_network_start_slot, get_rpc_client,
+    indexing_commitment_name, initialize_indexing_commitment, setup_logging, setup_metrics,
+    setup_pg_pool, LoggingFormat,
 };
 
 use photon_indexer::ingester::fetchers::BlockStreamConfig;
@@ -215,6 +216,11 @@ async fn main() {
     let args = Args::parse();
     setup_logging(args.logging_format);
     setup_metrics(args.metrics_endpoint);
+    initialize_indexing_commitment();
+    info!(
+        "Photon indexing commitment: {}",
+        indexing_commitment_name()
+    );
 
     if let Err(err) =
         photon_indexer::ingester::parser::set_compression_program_id(&args.compression_program_id)

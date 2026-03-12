@@ -1,5 +1,12 @@
 use core::fmt;
-use std::{env, net::UdpSocket, path::PathBuf, sync::Arc, thread::sleep, time::Duration};
+use std::{
+    env,
+    net::UdpSocket,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+    thread::sleep,
+    time::Duration,
+};
 
 use cadence::{BufferedUdpMetricSink, QueuingMetricSink, StatsdClient};
 use cadence_macros::set_global_default;
@@ -14,6 +21,9 @@ use sqlx::{
 };
 pub mod token_layout;
 pub mod typedefs;
+
+pub const PHOTON_INDEXING_COMMITMENT_ENV: &str = "PHOTON_INDEXING_COMMITMENT";
+static INDEXING_COMMITMENT: OnceLock<CommitmentConfig> = OnceLock::new();
 
 pub fn relative_project_path(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
@@ -69,7 +79,7 @@ pub async fn fetch_block_parent_slot(rpc_client: &RpcClient, slot: u64) -> u64 {
                 encoding: Some(UiTransactionEncoding::Base64),
                 transaction_details: Some(TransactionDetails::None),
                 rewards: None,
-                commitment: Some(CommitmentConfig::confirmed()),
+                commitment: Some(indexing_commitment()),
                 max_supported_transaction_version: Some(0),
             },
         )
@@ -104,6 +114,38 @@ impl fmt::Display for LoggingFormat {
     }
 }
 
+fn parse_indexing_commitment(value: &str) -> Option<CommitmentConfig> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "confirmed" => Some(CommitmentConfig::confirmed()),
+        "finalized" => Some(CommitmentConfig::finalized()),
+        _ => None,
+    }
+}
+
+fn resolve_indexing_commitment() -> CommitmentConfig {
+    env::var(PHOTON_INDEXING_COMMITMENT_ENV)
+        .ok()
+        .and_then(|value| parse_indexing_commitment(&value))
+        .unwrap_or_else(CommitmentConfig::confirmed)
+}
+
+pub fn initialize_indexing_commitment() -> CommitmentConfig {
+    INDEXING_COMMITMENT.get_or_init(resolve_indexing_commitment).clone()
+}
+
+pub fn indexing_commitment() -> CommitmentConfig {
+    INDEXING_COMMITMENT
+        .get_or_init(CommitmentConfig::confirmed)
+        .clone()
+}
+
+pub fn indexing_commitment_name() -> &'static str {
+    match indexing_commitment().commitment {
+        solana_commitment_config::CommitmentLevel::Finalized => "finalized",
+        _ => "confirmed",
+    }
+}
+
 pub fn setup_logging(logging_format: LoggingFormat) {
     let env_filter = env::var("RUST_LOG")
         .unwrap_or("info,sqlx=error,sea_orm_migration=error,jsonrpsee_server=warn".to_string());
@@ -135,7 +177,10 @@ pub async fn setup_pg_connection(database_url: &str, max_connections: u32) -> Da
 
 pub async fn fetch_current_slot_with_infinite_retry(client: &RpcClient) -> u64 {
     loop {
-        match client.get_slot().await {
+        match client
+            .get_slot_with_commitment(indexing_commitment())
+            .await
+        {
             Ok(slot) => {
                 return slot;
             }
@@ -151,7 +196,7 @@ pub fn get_rpc_client(rpc_url: &str) -> Arc<RpcClient> {
     Arc::new(RpcClient::new_with_timeout_and_commitment(
         rpc_url.to_string(),
         Duration::from_secs(90),
-        CommitmentConfig::confirmed(),
+        indexing_commitment(),
     ))
 }
 

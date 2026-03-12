@@ -4,6 +4,7 @@ use solana_account::Account;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_pubkey::Pubkey;
 
+use crate::common::indexing_commitment;
 use crate::api::error::PhotonApiError;
 use crate::dao::generated::{prelude::*, tree_metadata};
 use crate::ingester::parser::{get_compression_program_id, EXPECTED_TREE_OWNER};
@@ -92,7 +93,10 @@ pub async fn sync_tree_metadata(
     let program_id = Pubkey::from(compression_program.to_bytes());
     info!("Fetching all accounts for program: {}", program_id);
 
-    let current_slot = rpc_client.get_slot().await.map_err(|e| {
+    let current_slot = rpc_client
+        .get_slot_with_commitment(indexing_commitment())
+        .await
+        .map_err(|e| {
         PhotonApiError::UnexpectedError(format!("Failed to fetch current slot: {}", e))
     })?;
     info!("Current slot: {}", current_slot);
