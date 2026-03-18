@@ -80,6 +80,9 @@ use crate::api::method::get_queue_elements::{
 use crate::api::method::get_queue_info::{
     get_queue_info, GetQueueInfoRequest, GetQueueInfoResponse,
 };
+use crate::api::method::get_queue_leaf_indices::{
+    get_queue_leaf_indices, GetQueueLeafIndicesRequest, GetQueueLeafIndicesResponse,
+};
 use crate::api::method::get_validity_proof::{
     get_validity_proof, get_validity_proof_v2, GetValidityProofRequest,
     GetValidityProofRequestDocumentation, GetValidityProofRequestV2, GetValidityProofResponse,
@@ -288,6 +291,13 @@ impl PhotonApi {
         get_queue_info(self.db_conn.as_ref(), request).await
     }
 
+    pub async fn get_queue_leaf_indices(
+        &self,
+        request: GetQueueLeafIndicesRequest,
+    ) -> Result<GetQueueLeafIndicesResponse, PhotonApiError> {
+        get_queue_leaf_indices(self.db_conn.as_ref(), request).await
+    }
+
     pub async fn get_compressed_accounts_by_owner(
         &self,
         request: GetCompressedAccountsByOwnerRequest,
@@ -428,6 +438,11 @@ impl PhotonApi {
                 name: "getQueueElements".to_string(),
                 request: Some(GetQueueElementsRequest::schema().1),
                 response: GetQueueElementsResponse::schema().1,
+            },
+            OpenApiSpec {
+                name: "getQueueLeafIndices".to_string(),
+                request: Some(GetQueueLeafIndicesRequest::schema().1),
+                response: GetQueueLeafIndicesResponse::schema().1,
             },
             OpenApiSpec {
                 name: "getQueueInfo".to_string(),
