@@ -33,7 +33,11 @@ use crate::api::method::get_validity_proof::{
     AccountProofInputs, AddressProofInputs, CompressedProof, CompressedProofWithContext,
     CompressedProofWithContextV2, MerkleContextV2, RootIndex, TreeContextInfo,
 };
-use crate::api::method::interface::types::{AccountInterface, SolanaAccountData};
+use crate::api::method::interface::types::{
+    AccountInterface, GetAccountInterfaceRequest, GetAccountInterfaceResponse,
+    GetMultipleAccountInterfacesRequest, GetMultipleAccountInterfacesResponse, RpcCommitment,
+    SolanaAccountData,
+};
 use crate::api::method::utils::PaginatedSignatureInfoList;
 use crate::api::method::utils::SignatureInfo;
 use crate::api::method::utils::SignatureInfoList;
@@ -152,6 +156,11 @@ const JSON_CONTENT_TYPE: &str = "application/json";
     // Interface types
     AccountInterface,
     SolanaAccountData,
+    RpcCommitment,
+    GetAccountInterfaceRequest,
+    GetAccountInterfaceResponse,
+    GetMultipleAccountInterfacesRequest,
+    GetMultipleAccountInterfacesResponse,
 )))]
 struct ApiDoc;
 

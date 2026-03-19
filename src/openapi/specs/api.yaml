@@ -45,6 +45,13 @@ paths:
                   properties:
                     address:
                       $ref: '#/components/schemas/SerializablePubkey'
+                    commitment:
+                      type: string
+                      description: Optional RPC commitment for the hot (on-chain) lookup
+                      enum:
+                      - processed
+                      - confirmed
+                      - finalized
                   additionalProperties: false
         required: true
       responses:
@@ -84,7 +91,9 @@ paths:
                       context:
                         $ref: '#/components/schemas/Context'
                       value:
-                        $ref: '#/components/schemas/AccountInterface'
+                        allOf:
+                        - $ref: '#/components/schemas/AccountInterface'
+                        nullable: true
         '429':
           description: Exceeded rate limit.
           content:
@@ -3021,6 +3030,13 @@ paths:
                       items:
                         $ref: '#/components/schemas/SerializablePubkey'
                       description: List of account addresses to look up (max 100)
+                    commitment:
+                      type: string
+                      description: Optional RPC commitment for hot (on-chain) lookups
+                      enum:
+                      - processed
+                      - confirmed
+                      - finalized
                   additionalProperties: false
         required: true
       responses:

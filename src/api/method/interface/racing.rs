@@ -72,7 +72,8 @@ pub async fn hot_lookup(
 /// The lookup aggregates all compressed accounts associated with the queried pubkey:
 /// 1) direct onchain pubkey matches (decompressed account linkage),
 /// 2) derived compressed address matches (V2 address tree only),
-/// 3) token account owner / ata_owner matches (can return multiple accounts).
+/// 3) token account owner matches (can return multiple accounts).
+///    ata_owner is only used for synthetic SPL wallet-owner reconstruction.
 pub async fn cold_lookup(
     conn: &DatabaseConnection,
     address: &SerializablePubkey,
@@ -240,16 +241,13 @@ async fn find_cold_models(
         }
     }
 
-    // 3) Token account linkage by token owner / ata_owner.
+    // 3) Token account linkage by token owner.
+    // ata_owner is only used later for synthetic SPL wallet-owner reconstruction.
     let token_result = timeout(
         Duration::from_millis(DB_TIMEOUT_MS),
         token_accounts::Entity::find()
             .filter(token_accounts::Column::Spent.eq(false))
-            .filter(
-                Condition::any()
-                    .add(token_accounts::Column::AtaOwner.eq(address_bytes.clone()))
-                    .add(token_accounts::Column::Owner.eq(address_bytes)),
-            )
+            .filter(token_accounts::Column::Owner.eq(address_bytes))
             .find_also_related(accounts::Entity)
             .all(conn),
     )
@@ -692,8 +690,8 @@ fn cold_accounts_to_synthetic(
                         lamports: UnsignedInteger(hot.lamports),
                         data: Base64String(spl_bytes),
                         owner: SerializablePubkey::from(hot.owner.to_bytes()),
-                        executable: false,
-                        rent_epoch: UnsignedInteger(0),
+                        executable: hot.executable,
+                        rent_epoch: UnsignedInteger(hot.rent_epoch),
                         space: UnsignedInteger(space),
                     };
                 }
