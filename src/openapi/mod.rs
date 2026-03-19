@@ -34,7 +34,9 @@ use crate::api::method::get_validity_proof::{
     CompressedProofWithContextV2, MerkleContextV2, RootIndex, TreeContextInfo,
 };
 use crate::api::method::interface::types::{
-    AccountInterface, GetAccountInterfaceRequest, GetAccountInterfaceResponse,
+    AccountInterface, AtaInterfaceValue, GetAccountInterfaceRequest, GetAccountInterfaceResponse,
+    GetAtaDerivedAddresses, GetAtaHotEntry, GetAtaHotSources, GetAtaInterfaceConfig,
+    GetAtaInterfaceRequest, GetAtaInterfaceResponse, GetAtaProgramMode,
     GetMultipleAccountInterfacesRequest, GetMultipleAccountInterfacesResponse, RpcCommitment,
     SolanaAccountData,
 };
@@ -161,6 +163,14 @@ const JSON_CONTENT_TYPE: &str = "application/json";
     GetAccountInterfaceResponse,
     GetMultipleAccountInterfacesRequest,
     GetMultipleAccountInterfacesResponse,
+    GetAtaProgramMode,
+    AtaInterfaceValue,
+    GetAtaInterfaceConfig,
+    GetAtaDerivedAddresses,
+    GetAtaHotEntry,
+    GetAtaHotSources,
+    GetAtaInterfaceRequest,
+    GetAtaInterfaceResponse,
 )))]
 struct ApiDoc;
 

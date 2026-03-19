@@ -86,8 +86,9 @@ use crate::api::method::get_validity_proof::{
     GetValidityProofResponseV2,
 };
 use crate::api::method::interface::{
-    get_account_interface, get_multiple_account_interfaces, GetAccountInterfaceRequest,
-    GetAccountInterfaceResponse, GetMultipleAccountInterfacesRequest,
+    get_account_interface, get_ata_interface, get_multiple_account_interfaces,
+    GetAccountInterfaceRequest, GetAccountInterfaceResponse, GetAtaInterfaceRequest,
+    GetAtaInterfaceResponse, GetMultipleAccountInterfacesRequest,
     GetMultipleAccountInterfacesResponse,
 };
 use crate::api::method::utils::{
@@ -422,6 +423,13 @@ impl PhotonApi {
         get_multiple_account_interfaces(&self.db_conn, &self.rpc_client, request).await
     }
 
+    pub async fn get_ata_interface(
+        &self,
+        request: GetAtaInterfaceRequest,
+    ) -> Result<GetAtaInterfaceResponse, PhotonApiError> {
+        get_ata_interface(&self.db_conn, &self.rpc_client, request).await
+    }
+
     pub fn method_api_specs() -> Vec<OpenApiSpec> {
         vec![
             OpenApiSpec {
@@ -621,6 +629,11 @@ impl PhotonApi {
                 name: "getMultipleAccountInterfaces".to_string(),
                 request: Some(GetMultipleAccountInterfacesRequest::schema().1),
                 response: GetMultipleAccountInterfacesResponse::schema().1,
+            },
+            OpenApiSpec {
+                name: "getAtaInterface".to_string(),
+                request: Some(GetAtaInterfaceRequest::schema().1),
+                response: GetAtaInterfaceResponse::schema().1,
             },
         ]
     }
