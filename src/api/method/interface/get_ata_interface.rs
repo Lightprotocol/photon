@@ -1,4 +1,5 @@
 use sea_orm::DatabaseConnection;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use solana_account::Account as SolanaAccount;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_program_option::COption;
@@ -15,6 +16,7 @@ use crate::common::typedefs::context::Context;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::common::typedefs::token_data::{AccountState, TokenData};
 use crate::common::typedefs::unsigned_integer::UnsignedInteger;
+use crate::dao::generated::token_accounts;
 use crate::ingester::persist::LIGHT_TOKEN_PROGRAM_ID;
 
 use super::racing::hot_lookup;
@@ -176,6 +178,17 @@ fn token_data_to_spl_account(token_data: &TokenData) -> SplTokenAccount {
         delegated_amount,
         close_authority: COption::None,
     }
+}
+
+fn token_data_to_spl_account_with_wallet_owner(
+    token_data: &TokenData,
+    wallet_owner: Option<[u8; 32]>,
+) -> SplTokenAccount {
+    let mut spl = token_data_to_spl_account(token_data);
+    if let Some(owner) = wallet_owner {
+        spl.owner = Pubkey::from(owner);
+    }
+    spl
 }
 
 fn source_kind_for_mode(mode: GetAtaProgramMode) -> SourceKind {
@@ -360,6 +373,36 @@ fn resolve_request_options(request: &GetAtaInterfaceRequest) -> Result<RequestOp
     })
 }
 
+fn validate_min_context_slot(
+    min_context_slot: Option<u64>,
+    db_slot: u64,
+    max_hot_slot: Option<u64>,
+) -> Result<(), PhotonApiError> {
+    let Some(min_slot) = min_context_slot else {
+        return Ok(());
+    };
+
+    if db_slot < min_slot {
+        return Err(PhotonApiError::StaleSlot(min_slot - db_slot));
+    }
+
+    if let Some(hot_slot) = max_hot_slot {
+        if hot_slot < min_slot {
+            return Err(PhotonApiError::StaleSlot(min_slot - hot_slot));
+        }
+    }
+
+    Ok(())
+}
+
+fn should_surface_hot_error(
+    account_present: bool,
+    attempted_hot_lookups: usize,
+    hot_error_present: bool,
+) -> bool {
+    !account_present && attempted_hot_lookups > 0 && hot_error_present
+}
+
 /// Return canonical ATA interface for (owner, mint) with hot/cold aggregation.
 pub async fn get_ata_interface(
     conn: &DatabaseConnection,
@@ -368,12 +411,6 @@ pub async fn get_ata_interface(
 ) -> Result<GetAtaInterfaceResponse, PhotonApiError> {
     let context = Context::extract(conn).await?;
     let options = resolve_request_options(&request)?;
-
-    if let Some(min_context_slot) = options.min_context_slot {
-        if context.slot < min_context_slot {
-            return Err(PhotonApiError::StaleSlot(min_context_slot - context.slot));
-        }
-    }
 
     if !options.allow_owner_off_curve && !request.owner.0.is_on_curve() {
         return Err(PhotonApiError::ValidationError(
@@ -413,77 +450,54 @@ pub async fn get_ata_interface(
         token2022: None,
     };
     let mut sources: Vec<Source> = Vec::new();
+    let mut max_hot_slot: Option<u64> = None;
+    let mut first_hot_error: Option<PhotonApiError> = None;
+    let attempted_hot_lookups =
+        usize::from(fetch_light_hot) + usize::from(fetch_spl_hot) + usize::from(fetch_t22_hot);
 
-    if fetch_light_hot {
-        if let Ok(hot) = hot_lookup(
-            rpc_client,
-            &Pubkey::from(light_ata.0.to_bytes()),
-            options.commitment,
-        )
-        .await
-        {
-            if let Some(account) = hot.account.as_ref() {
-                if let Some((entry, src)) = hot_entry_from_account(
-                    light_ata,
-                    account,
-                    LIGHT_TOKEN_PROGRAM_ID,
-                    request.mint,
-                    SourceKind::LightHot,
-                ) {
-                    hot_sources.light = Some(entry);
-                    sources.push(src);
-                }
-            }
+    let light_hot_fut = async {
+        if fetch_light_hot {
+            Some(
+                hot_lookup(
+                    rpc_client,
+                    &Pubkey::from(light_ata.0.to_bytes()),
+                    options.commitment,
+                )
+                .await,
+            )
+        } else {
+            None
         }
-    }
-
-    if fetch_spl_hot {
-        if let Ok(hot) = hot_lookup(
-            rpc_client,
-            &Pubkey::from(spl_ata.0.to_bytes()),
-            options.commitment,
-        )
-        .await
-        {
-            if let Some(account) = hot.account.as_ref() {
-                if let Some((entry, src)) = hot_entry_from_account(
-                    spl_ata,
-                    account,
-                    SPL_TOKEN_PROGRAM_ID,
-                    request.mint,
-                    SourceKind::SplHot,
-                ) {
-                    hot_sources.spl = Some(entry);
-                    sources.push(src);
-                }
-            }
+    };
+    let spl_hot_fut = async {
+        if fetch_spl_hot {
+            Some(
+                hot_lookup(
+                    rpc_client,
+                    &Pubkey::from(spl_ata.0.to_bytes()),
+                    options.commitment,
+                )
+                .await,
+            )
+        } else {
+            None
         }
-    }
-
-    if fetch_t22_hot {
-        if let Ok(hot) = hot_lookup(
-            rpc_client,
-            &Pubkey::from(token2022_ata.0.to_bytes()),
-            options.commitment,
-        )
-        .await
-        {
-            if let Some(account) = hot.account.as_ref() {
-                if let Some((entry, src)) = hot_entry_from_account(
-                    token2022_ata,
-                    account,
-                    TOKEN_2022_PROGRAM_ID,
-                    request.mint,
-                    SourceKind::Token2022Hot,
-                ) {
-                    hot_sources.token2022 = Some(entry);
-                    sources.push(src);
-                }
-            }
+    };
+    let t22_hot_fut = async {
+        if fetch_t22_hot {
+            Some(
+                hot_lookup(
+                    rpc_client,
+                    &Pubkey::from(token2022_ata.0.to_bytes()),
+                    options.commitment,
+                )
+                .await,
+            )
+        } else {
+            None
         }
-    }
-
-    let cold_response = get_compressed_token_accounts_by_owner_v2(
+    };
+    let cold_fut = get_compressed_token_accounts_by_owner_v2(
         conn,
         GetCompressedTokenAccountsByOwner {
             owner: request.owner,
@@ -491,8 +505,113 @@ pub async fn get_ata_interface(
             cursor: None,
             limit: None,
         },
-    )
-    .await?;
+    );
+
+    let (light_hot_res, spl_hot_res, t22_hot_res, cold_result) =
+        tokio::join!(light_hot_fut, spl_hot_fut, t22_hot_fut, cold_fut);
+
+    if let Some(result) = light_hot_res {
+        match result {
+            Ok(hot) => {
+                max_hot_slot = Some(max_hot_slot.map_or(hot.slot, |s| s.max(hot.slot)));
+                if let Some(account) = hot.account.as_ref() {
+                    if let Some((entry, src)) = hot_entry_from_account(
+                        light_ata,
+                        account,
+                        LIGHT_TOKEN_PROGRAM_ID,
+                        request.mint,
+                        SourceKind::LightHot,
+                    ) {
+                        hot_sources.light = Some(entry);
+                        sources.push(src);
+                    }
+                }
+            }
+            Err(e) => {
+                if first_hot_error.is_none() {
+                    first_hot_error = Some(e);
+                }
+            }
+        }
+    }
+
+    if let Some(result) = spl_hot_res {
+        match result {
+            Ok(hot) => {
+                max_hot_slot = Some(max_hot_slot.map_or(hot.slot, |s| s.max(hot.slot)));
+                if let Some(account) = hot.account.as_ref() {
+                    if let Some((entry, src)) = hot_entry_from_account(
+                        spl_ata,
+                        account,
+                        SPL_TOKEN_PROGRAM_ID,
+                        request.mint,
+                        SourceKind::SplHot,
+                    ) {
+                        hot_sources.spl = Some(entry);
+                        sources.push(src);
+                    }
+                }
+            }
+            Err(e) => {
+                if first_hot_error.is_none() {
+                    first_hot_error = Some(e);
+                }
+            }
+        }
+    }
+
+    if let Some(result) = t22_hot_res {
+        match result {
+            Ok(hot) => {
+                max_hot_slot = Some(max_hot_slot.map_or(hot.slot, |s| s.max(hot.slot)));
+                if let Some(account) = hot.account.as_ref() {
+                    if let Some((entry, src)) = hot_entry_from_account(
+                        token2022_ata,
+                        account,
+                        TOKEN_2022_PROGRAM_ID,
+                        request.mint,
+                        SourceKind::Token2022Hot,
+                    ) {
+                        hot_sources.token2022 = Some(entry);
+                        sources.push(src);
+                    }
+                }
+            }
+            Err(e) => {
+                if first_hot_error.is_none() {
+                    first_hot_error = Some(e);
+                }
+            }
+        }
+    }
+
+    validate_min_context_slot(options.min_context_slot, context.slot, max_hot_slot)?;
+    let cold_response = cold_result?;
+
+    let hashes: Vec<Vec<u8>> = cold_response
+        .value
+        .items
+        .iter()
+        .map(|i| i.account.hash.to_vec())
+        .collect();
+    let token_rows = if hashes.is_empty() {
+        Vec::new()
+    } else {
+        token_accounts::Entity::find()
+            .filter(token_accounts::Column::Spent.eq(false))
+            .filter(token_accounts::Column::Hash.is_in(hashes))
+            .all(conn)
+            .await
+            .map_err(PhotonApiError::DatabaseError)?
+    };
+    let ata_owner_by_hash: std::collections::HashMap<Vec<u8>, [u8; 32]> = token_rows
+        .into_iter()
+        .filter_map(|row| {
+            row.ata_owner
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok())
+                .map(|owner| (row.hash, owner))
+        })
+        .collect();
 
     let mut cold_accounts: Vec<AccountV2> = Vec::new();
     let mut cold_sources: Vec<Source> = cold_response
@@ -501,7 +620,8 @@ pub async fn get_ata_interface(
         .into_iter()
         .map(|item| {
             cold_accounts.push(item.account.clone());
-            let spl = token_data_to_spl_account(&item.token_data);
+            let wallet_owner = ata_owner_by_hash.get(&item.account.hash.to_vec()).copied();
+            let spl = token_data_to_spl_account_with_wallet_owner(&item.token_data, wallet_owner);
             Source {
                 kind: source_kind_for_mode(options.mode),
                 amount: item.token_data.amount.0,
@@ -525,6 +645,9 @@ pub async fn get_ata_interface(
     sources.extend(cold_sources);
 
     let account = build_synthetic_account_from_sources(&mut sources);
+    if should_surface_hot_error(account.is_some(), attempted_hot_lookups, first_hot_error.is_some()) {
+        return Err(first_hot_error.expect("checked Some above"));
+    }
     let cold = (!cold_accounts.is_empty()).then_some(cold_accounts);
 
     let value = account.map(|account| AtaInterfaceValue {
@@ -658,5 +781,45 @@ mod tests {
         };
         let options = resolve_request_options(&req).expect("expected options");
         assert_eq!(options.mode, GetAtaProgramMode::Token2022);
+    }
+
+    #[test]
+    fn min_context_slot_checks_both_db_and_hot_slots() {
+        let err = validate_min_context_slot(Some(100), 90, Some(200))
+            .expect_err("expected stale db slot error");
+        assert_eq!(err, PhotonApiError::StaleSlot(10));
+
+        let err = validate_min_context_slot(Some(100), 110, Some(95))
+            .expect_err("expected stale hot slot error");
+        assert_eq!(err, PhotonApiError::StaleSlot(5));
+
+        validate_min_context_slot(Some(100), 110, Some(120)).expect("should pass");
+        validate_min_context_slot(Some(100), 110, None).expect("should pass without hot");
+    }
+
+    #[test]
+    fn wallet_owner_override_is_applied_to_spl_owner() {
+        let token_data = TokenData {
+            mint: SerializablePubkey::from(Pubkey::new_unique()),
+            owner: SerializablePubkey::from(Pubkey::new_unique()),
+            amount: UnsignedInteger(10),
+            delegate: None,
+            state: AccountState::initialized,
+            tlv: None,
+        };
+        let wallet_owner = Pubkey::new_unique();
+        let spl = token_data_to_spl_account_with_wallet_owner(
+            &token_data,
+            Some(wallet_owner.to_bytes()),
+        );
+        assert_eq!(spl.owner, wallet_owner);
+    }
+
+    #[test]
+    fn hot_error_is_surfaced_only_when_no_aggregate_value_exists() {
+        assert!(should_surface_hot_error(false, 1, true));
+        assert!(!should_surface_hot_error(true, 1, true));
+        assert!(!should_surface_hot_error(false, 0, true));
+        assert!(!should_surface_hot_error(false, 1, false));
     }
 }
