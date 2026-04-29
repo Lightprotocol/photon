@@ -3,6 +3,9 @@ use crate::api::error::PhotonApiError;
 use crate::common::typedefs::account::AccountWithContext;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
+use crate::ingester::parser::shielded_pool_events::{
+    EncryptedTxEphemeralKey, ShieldedPoolTxKind, ShieldedPublicDelta,
+};
 use crate::ingester::parser::tree_info::TreeInfo;
 use borsh::{BorshDeserialize, BorshSerialize};
 use jsonrpsee_core::Serialize;
@@ -87,6 +90,56 @@ impl From<NewAddress> for AddressQueueUpdate {
     }
 }
 
+/// One row destined for `shielded_utxo_events`. Mirrors the canonical event
+/// shape but flattens it into per-column fields so persistence can do raw
+/// inserts without re-decoding the borsh blob.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShieldedTxEventRecord {
+    pub tx_signature: Signature,
+    pub event_index: u32,
+    pub slot: u64,
+    pub version: u8,
+    pub instruction_tag: u8,
+    pub tx_kind: ShieldedPoolTxKind,
+    pub protocol_config: [u8; 32],
+    pub zone_config_hash: Option<[u8; 32]>,
+    pub tx_ephemeral_pubkey: [u8; 32],
+    pub encrypted_tx_ephemeral_keys: Vec<EncryptedTxEphemeralKey>,
+    pub operation_commitment: [u8; 32],
+    pub public_input_hash: Option<[u8; 32]>,
+    pub utxo_public_inputs_hash: Option<[u8; 32]>,
+    pub tree_public_inputs_hash: Option<[u8; 32]>,
+    pub nullifier_chain: Option<[u8; 32]>,
+    pub input_nullifiers: Vec<[u8; 32]>,
+    pub public_delta: ShieldedPublicDelta,
+    pub relayer_fee: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShieldedOutputRecord {
+    pub tx_signature: Signature,
+    pub event_index: u32,
+    pub output_index: u8,
+    pub slot: u64,
+    pub utxo_hash: [u8; 32],
+    pub utxo_tree: Option<[u8; 32]>,
+    pub leaf_index: Option<u64>,
+    pub tree_sequence: Option<u64>,
+    pub encrypted_utxo: Vec<u8>,
+    pub encrypted_utxo_hash: [u8; 32],
+    pub fmd_clue: Option<Vec<u8>>,
+    pub zone_config_hash: Option<[u8; 32]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShieldedNullifierEventRecord {
+    pub tx_signature: Signature,
+    pub event_index: u32,
+    pub slot: u64,
+    pub nullifier: [u8; 32],
+    pub nullifier_tree: [u8; 32],
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 /// Representation of state update of the compression system that is optimal for simple persistence.
 pub struct StateUpdate {
@@ -106,6 +159,16 @@ pub struct StateUpdate {
     /// ATA owner info for compressed ATAs (account_hash -> wallet_owner_pubkey).
     /// Used to populate the ata_owner column in token_accounts table.
     pub ata_owners: HashMap<Hash, Pubkey>,
+    /// Zoned shielded-pool transaction events. Public ciphertext + public
+    /// commitments only — never plaintext UTXO payloads.
+    pub shielded_tx_events: Vec<ShieldedTxEventRecord>,
+    /// Per-output rows tied back to a shielded transaction event.
+    pub shielded_outputs: Vec<ShieldedOutputRecord>,
+    /// Spend events for already-created UTXOs. 
+    pub shielded_nullifier_events: Vec<ShieldedNullifierEventRecord>,
+    /// Zone config hashes encountered in this update. Used by persistence to
+    /// upsert `zone_configs` rows and update `last_seen_slot`.
+    pub shielded_zone_configs_seen: HashMap<[u8; 32], u64>,
 }
 
 /// Result of filtering a StateUpdate by known trees
@@ -328,6 +391,13 @@ impl StateUpdate {
             batch_nullify_context: self.batch_nullify_context,
             batch_new_addresses,
             ata_owners: self.ata_owners,
+            // Shielded-pool data is gated by `zone_config_hash` rather than by
+            // the existing tree-metadata table, so it passes through the
+            // tree-known filter unchanged.
+            shielded_tx_events: self.shielded_tx_events,
+            shielded_outputs: self.shielded_outputs,
+            shielded_nullifier_events: self.shielded_nullifier_events,
+            shielded_zone_configs_seen: self.shielded_zone_configs_seen,
         };
 
         Ok(FilteredStateUpdate {
@@ -376,6 +446,19 @@ impl StateUpdate {
                 .batch_nullify_context
                 .extend(update.batch_nullify_context);
             merged.ata_owners.extend(update.ata_owners);
+
+            merged.shielded_tx_events.extend(update.shielded_tx_events);
+            merged.shielded_outputs.extend(update.shielded_outputs);
+            merged
+                .shielded_nullifier_events
+                .extend(update.shielded_nullifier_events);
+            for (zone_hash, slot) in update.shielded_zone_configs_seen {
+                merged
+                    .shielded_zone_configs_seen
+                    .entry(zone_hash)
+                    .and_modify(|existing| *existing = (*existing).max(slot))
+                    .or_insert(slot);
+            }
         }
 
         merged

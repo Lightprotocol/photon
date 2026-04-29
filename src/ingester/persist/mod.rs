@@ -40,6 +40,7 @@ use std::{cmp::max, collections::HashMap};
 pub mod indexed_merkle_tree;
 pub mod persisted_indexed_merkle_tree;
 pub mod persisted_state_tree;
+pub mod shielded_pool;
 
 pub use merkle_proof_with_context::MerkleProofWithContext;
 
@@ -92,6 +93,10 @@ pub async fn persist_state_update(
         batch_nullify_context,
         batch_new_addresses,
         ata_owners,
+        shielded_tx_events,
+        shielded_outputs,
+        shielded_nullifier_events,
+        shielded_zone_configs_seen,
     } = state_update;
 
     let input_accounts_len = in_accounts.len();
@@ -238,6 +243,24 @@ pub async fn persist_state_update(
     }
 
     persist_batch_events(txn, batch_merkle_tree_events, &tree_info_cache).await?;
+
+    if !shielded_tx_events.is_empty()
+        || !shielded_outputs.is_empty()
+        || !shielded_nullifier_events.is_empty()
+        || !shielded_zone_configs_seen.is_empty()
+    {
+        debug!("Persisting shielded-pool events...");
+        let zone_configs_seen: Vec<([u8; 32], u64)> =
+            shielded_zone_configs_seen.into_iter().collect();
+        shielded_pool::persist_shielded_pool_state(
+            txn,
+            &shielded_tx_events,
+            &shielded_outputs,
+            &shielded_nullifier_events,
+            &zone_configs_seen,
+        )
+        .await?;
+    }
 
     metric! {
         statsd_count!("state_update.input_accounts", input_accounts_len as u64);

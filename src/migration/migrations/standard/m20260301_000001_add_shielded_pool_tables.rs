@@ -1,0 +1,448 @@
+use sea_orm::DeriveIden;
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Per-zone configuration metadata. Public-zone-only in the prototype;
+        // private zones will populate this from auditor key boxes
+        // rather than the on-chain event.
+        manager
+            .create_table(
+                Table::create()
+                    .table(ZoneConfigs::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ZoneConfigs::ZoneConfigHash)
+                            .binary_len(32)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ZoneConfigs::FirstSeenSlot)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ZoneConfigs::LastSeenSlot)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(ZoneConfigs::Metadata).binary().null())
+                    .to_owned(),
+            )
+            .await?;
+
+        // Top-level shielded-pool transaction events. One row per
+        // `(tx_signature, event_index)`. Stores ciphertext + public commitments
+        // only; plaintext never lives here.
+        manager
+            .create_table(
+                Table::create()
+                    .table(ShieldedUtxoEvents::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::TxSignature)
+                            .binary_len(64)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::EventIndex)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::Slot)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::Version)
+                            .small_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::InstructionTag)
+                            .small_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::TxKind)
+                            .small_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::ProtocolConfig)
+                            .binary_len(32)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::ZoneConfigHash)
+                            .binary_len(32)
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::TxEphemeralPubkey)
+                            .binary_len(32)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::EncryptedTxEphemeralKeys)
+                            .binary()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::OperationCommitment)
+                            .binary_len(32)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::PublicInputsHash)
+                            .binary_len(32)
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::UtxoPublicInputsHash)
+                            .binary_len(32)
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::TreePublicInputsHash)
+                            .binary_len(32)
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::NullifierChain)
+                            .binary_len(32)
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::InputNullifiers)
+                            .binary()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::PublicDeltaMint)
+                            .binary_len(32)
+                            .null(),
+                    )
+                    // i128 stored as raw 16-byte big-endian to dodge driver
+                    // dependence on numeric/decimal handling for signed 128 bit.
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::PublicDeltaSpl)
+                            .binary_len(16)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::PublicDeltaSol)
+                            .binary_len(16)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoEvents::RelayerFee)
+                            .big_integer()
+                            .null(),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(ShieldedUtxoEvents::TxSignature)
+                            .col(ShieldedUtxoEvents::EventIndex),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("shielded_utxo_events_zone_config_fk")
+                            .from_tbl(ShieldedUtxoEvents::Table)
+                            .from_col(ShieldedUtxoEvents::ZoneConfigHash)
+                            .to_tbl(ZoneConfigs::Table)
+                            .to_col(ZoneConfigs::ZoneConfigHash),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_shielded_utxo_events_zone_slot")
+                    .table(ShieldedUtxoEvents::Table)
+                    .col(ShieldedUtxoEvents::ZoneConfigHash)
+                    .col(ShieldedUtxoEvents::Slot)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_shielded_utxo_events_op_commit")
+                    .table(ShieldedUtxoEvents::Table)
+                    .col(ShieldedUtxoEvents::OperationCommitment)
+                    .to_owned(),
+            )
+            .await?;
+
+        // One row per created UTXO. Composite primary key matches the
+        // (tx_signature, event_index, output_index) uniqueness rule.
+        manager
+            .create_table(
+                Table::create()
+                    .table(ShieldedUtxoOutputs::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::TxSignature)
+                            .binary_len(64)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::EventIndex)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::OutputIndex)
+                            .small_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::Slot)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::UtxoHash)
+                            .binary_len(32)
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::UtxoTree)
+                            .binary_len(32)
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::LeafIndex)
+                            .big_integer()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::TreeSequence)
+                            .big_integer()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::EncryptedUtxo)
+                            .binary()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::EncryptedUtxoHash)
+                            .binary_len(32)
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(ShieldedUtxoOutputs::FmdClue).binary().null())
+                    .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::ZoneConfigHash)
+                            .binary_len(32)
+                            .null(),
+                    )
+                    .primary_key(
+                        Index::create()
+                            .col(ShieldedUtxoOutputs::TxSignature)
+                            .col(ShieldedUtxoOutputs::EventIndex)
+                            .col(ShieldedUtxoOutputs::OutputIndex),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("shielded_utxo_outputs_event_fk")
+                            .from_tbl(ShieldedUtxoOutputs::Table)
+                            .from_col(ShieldedUtxoOutputs::TxSignature)
+                            .from_col(ShieldedUtxoOutputs::EventIndex)
+                            .to_tbl(ShieldedUtxoEvents::Table)
+                            .to_col(ShieldedUtxoEvents::TxSignature)
+                            .to_col(ShieldedUtxoEvents::EventIndex)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("shielded_utxo_outputs_zone_config_fk")
+                            .from_tbl(ShieldedUtxoOutputs::Table)
+                            .from_col(ShieldedUtxoOutputs::ZoneConfigHash)
+                            .to_tbl(ZoneConfigs::Table)
+                            .to_col(ZoneConfigs::ZoneConfigHash),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_shielded_utxo_outputs_tree_leaf")
+                    .table(ShieldedUtxoOutputs::Table)
+                    .col(ShieldedUtxoOutputs::UtxoTree)
+                    .col(ShieldedUtxoOutputs::LeafIndex)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_shielded_utxo_outputs_zone_slot")
+                    .table(ShieldedUtxoOutputs::Table)
+                    .col(ShieldedUtxoOutputs::ZoneConfigHash)
+                    .col(ShieldedUtxoOutputs::Slot)
+                    .to_owned(),
+            )
+            .await?;
+
+        // Spend events. Empty in the first vertical slice; shape locked now so
+        manager
+            .create_table(
+                Table::create()
+                    .table(ShieldedNullifierEvents::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(ShieldedNullifierEvents::Nullifier)
+                            .binary_len(32)
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedNullifierEvents::NullifierTree)
+                            .binary_len(32)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedNullifierEvents::TxSignature)
+                            .binary_len(64)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedNullifierEvents::EventIndex)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ShieldedNullifierEvents::Slot)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("shielded_nullifier_events_event_fk")
+                            .from_tbl(ShieldedNullifierEvents::Table)
+                            .from_col(ShieldedNullifierEvents::TxSignature)
+                            .from_col(ShieldedNullifierEvents::EventIndex)
+                            .to_tbl(ShieldedUtxoEvents::Table)
+                            .to_col(ShieldedUtxoEvents::TxSignature)
+                            .to_col(ShieldedUtxoEvents::EventIndex)
+                            .on_delete(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_shielded_nullifier_events_tx")
+                    .table(ShieldedNullifierEvents::Table)
+                    .col(ShieldedNullifierEvents::TxSignature)
+                    .col(ShieldedNullifierEvents::EventIndex)
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(ShieldedNullifierEvents::Table)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(Table::drop().table(ShieldedUtxoOutputs::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(ShieldedUtxoEvents::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(ZoneConfigs::Table).to_owned())
+            .await?;
+        Ok(())
+    }
+}
+
+#[derive(DeriveIden)]
+enum ZoneConfigs {
+    Table,
+    ZoneConfigHash,
+    FirstSeenSlot,
+    LastSeenSlot,
+    Metadata,
+}
+
+#[derive(DeriveIden)]
+enum ShieldedUtxoEvents {
+    Table,
+    TxSignature,
+    EventIndex,
+    Slot,
+    Version,
+    InstructionTag,
+    TxKind,
+    ProtocolConfig,
+    ZoneConfigHash,
+    TxEphemeralPubkey,
+    EncryptedTxEphemeralKeys,
+    OperationCommitment,
+    PublicInputsHash,
+    UtxoPublicInputsHash,
+    TreePublicInputsHash,
+    NullifierChain,
+    InputNullifiers,
+    PublicDeltaMint,
+    PublicDeltaSpl,
+    PublicDeltaSol,
+    RelayerFee,
+}
+
+#[derive(DeriveIden)]
+enum ShieldedUtxoOutputs {
+    Table,
+    TxSignature,
+    EventIndex,
+    OutputIndex,
+    Slot,
+    UtxoHash,
+    UtxoTree,
+    LeafIndex,
+    TreeSequence,
+    EncryptedUtxo,
+    EncryptedUtxoHash,
+    FmdClue,
+    ZoneConfigHash,
+}
+
+#[derive(DeriveIden)]
+enum ShieldedNullifierEvents {
+    Table,
+    Nullifier,
+    NullifierTree,
+    TxSignature,
+    EventIndex,
+    Slot,
+}

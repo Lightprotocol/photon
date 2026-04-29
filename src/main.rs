@@ -107,6 +107,10 @@ struct Args {
     #[arg(long, default_value = "compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq")]
     compression_program_id: String,
 
+    /// Custom shielded pool program ID (optional)
+    #[arg(long, default_value = "6cGXszer5keoaWm8Co5G9f4KGBThuGz4NsKTqYij1emg")]
+    shielded_pool_program_id: String,
+
     /// Metrics endpoint in the format `host:port`
     /// If provided, metrics will be sent to the specified statsd server.
     #[arg(long, default_value = None)]
@@ -220,6 +224,12 @@ async fn main() {
         photon_indexer::ingester::parser::set_compression_program_id(&args.compression_program_id)
     {
         error!("Failed to set compression program ID: {}", err);
+        std::process::exit(1);
+    }
+    if let Err(err) = photon_indexer::ingester::parser::set_shielded_pool_program_id(
+        &args.shielded_pool_program_id,
+    ) {
+        error!("Failed to set shielded pool program ID: {}", err);
         std::process::exit(1);
     }
 

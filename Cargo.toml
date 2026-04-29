@@ -144,6 +144,11 @@ rust-s3 = "0.34.0"
 cloud-storage = "0.11.1"
 jsonwebtoken = "9"
 
+[features]
+default = []
+shielded-fixtures = []
+zone-rpc-prototype = ["shielded-fixtures"]
+
 [dev-dependencies]
 function_name = "0.3.0"
 serial_test = "2.0.0"

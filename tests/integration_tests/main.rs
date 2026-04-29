@@ -12,6 +12,8 @@ mod mock_tests;
 mod monitor_tests;
 mod open_api_tests;
 mod prod_tests;
+#[cfg(feature = "zone-rpc-prototype")]
+mod shielded_pool_wiring_test;
 mod snapshot_tests;
 mod utils;
 mod zeroeth_element_fix_test;

@@ -11,6 +11,10 @@ pub use self::tree_info::TreeResolver;
 
 pub mod indexer_events;
 pub mod merkle_tree_events_parser;
+pub mod shielded_pool_event_parser;
+pub mod shielded_pool_events;
+#[cfg(any(test, feature = "shielded-fixtures"))]
+pub mod shielded_pool_test_fixture;
 pub mod state_update;
 pub mod tree_info;
 mod tx_event_parser;
@@ -20,11 +24,13 @@ use crate::ingester::parser::tx_event_parser_v2::parse_public_transaction_event_
 use solana_pubkey::pubkey;
 
 pub const NOOP_PROGRAM_ID: Pubkey = pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
+pub const SHIELDED_POOL_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x53; 32]);
 const SYSTEM_PROGRAM: Pubkey = pubkey!("11111111111111111111111111111111");
 const VOTE_PROGRAM_ID: Pubkey = pubkey!("Vote111111111111111111111111111111111111111");
 
 // Compression program ID can be overridden at runtime
 static ACCOUNT_COMPRESSION_PROGRAM_ID: OnceLock<Pubkey> = OnceLock::new();
+static SHIELDED_POOL_PROGRAM_ID_OVERRIDE: OnceLock<Pubkey> = OnceLock::new();
 pub fn get_compression_program_id() -> Pubkey {
     *ACCOUNT_COMPRESSION_PROGRAM_ID
         .get_or_init(|| pubkey!("compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq"))
@@ -36,6 +42,19 @@ pub fn set_compression_program_id(program_id_str: &str) -> Result<(), String> {
             Err(_) => Err("Compression program ID has already been set".to_string()),
         },
         Err(err) => Err(format!("Invalid compression program ID: {}", err)),
+    }
+}
+
+pub fn get_shielded_pool_program_id() -> Pubkey {
+    *SHIELDED_POOL_PROGRAM_ID_OVERRIDE.get_or_init(|| SHIELDED_POOL_PROGRAM_ID)
+}
+pub fn set_shielded_pool_program_id(program_id_str: &str) -> Result<(), String> {
+    match program_id_str.parse::<Pubkey>() {
+        Ok(pubkey) => match SHIELDED_POOL_PROGRAM_ID_OVERRIDE.set(pubkey) {
+            Ok(_) => Ok(()),
+            Err(_) => Err("Shielded pool program ID has already been set".to_string()),
+        },
+        Err(err) => Err(format!("Invalid shielded pool program ID: {}", err)),
     }
 }
 
@@ -69,6 +88,23 @@ where
         let mut ordered_instructions = Vec::new();
         ordered_instructions.push(instruction_group.outer_instruction.clone());
         ordered_instructions.extend(instruction_group.inner_instructions.clone());
+
+        // Shielded-pool Noop payloads are only trusted when emitted by the
+        // configured shielded-pool program. This keeps arbitrary Noop
+        // instructions from injecting public shielded rows.
+        let shielded_pool_program_id = get_shielded_pool_program_id();
+        let shielded_update = self::shielded_pool_event_parser::parse_shielded_pool_events(
+            &instruction_group,
+            tx.signature,
+            slot,
+            &[shielded_pool_program_id],
+        );
+        if !shielded_update.shielded_tx_events.is_empty()
+            || !shielded_update.shielded_outputs.is_empty()
+            || !shielded_update.shielded_nullifier_events.is_empty()
+        {
+            state_updates.push(shielded_update);
+        }
 
         let mut vec_accounts = Vec::<Vec<Pubkey>>::new();
         let mut vec_instructions_data = Vec::new();

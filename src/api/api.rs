@@ -288,6 +288,50 @@ impl PhotonApi {
         get_queue_info(self.db_conn.as_ref(), request).await
     }
 
+    pub async fn get_shielded_utxo(
+        &self,
+        request: crate::api::method::get_shielded_utxos::GetShieldedUtxoRequest,
+    ) -> Result<crate::api::method::get_shielded_utxos::ShieldedUtxoResponse, PhotonApiError> {
+        crate::api::method::get_shielded_utxos::get_shielded_utxo(self.db_conn.as_ref(), request)
+            .await
+    }
+
+    pub async fn get_shielded_utxos_by_zone(
+        &self,
+        request: crate::api::method::get_shielded_utxos::GetShieldedUtxosByZoneRequest,
+    ) -> Result<crate::api::method::get_shielded_utxos::ShieldedUtxoListResponse, PhotonApiError>
+    {
+        crate::api::method::get_shielded_utxos::get_shielded_utxos_by_zone(
+            self.db_conn.as_ref(),
+            request,
+        )
+        .await
+    }
+
+    pub async fn get_shielded_utxos_by_signature(
+        &self,
+        request: crate::api::method::get_shielded_utxos::GetShieldedUtxosBySignatureRequest,
+    ) -> Result<crate::api::method::get_shielded_utxos::ShieldedUtxoListResponse, PhotonApiError>
+    {
+        crate::api::method::get_shielded_utxos::get_shielded_utxos_by_signature(
+            self.db_conn.as_ref(),
+            request,
+        )
+        .await
+    }
+
+    pub async fn get_shielded_utxos_by_tree(
+        &self,
+        request: crate::api::method::get_shielded_utxos::GetShieldedUtxosByTreeRequest,
+    ) -> Result<crate::api::method::get_shielded_utxos::ShieldedUtxoListResponse, PhotonApiError>
+    {
+        crate::api::method::get_shielded_utxos::get_shielded_utxos_by_tree(
+            self.db_conn.as_ref(),
+            request,
+        )
+        .await
+    }
+
     pub async fn get_compressed_accounts_by_owner(
         &self,
         request: GetCompressedAccountsByOwnerRequest,
@@ -621,6 +665,42 @@ impl PhotonApi {
                 name: "getMultipleAccountInterfaces".to_string(),
                 request: Some(GetMultipleAccountInterfacesRequest::schema().1),
                 response: GetMultipleAccountInterfacesResponse::schema().1,
+            },
+            // Zoned shielded-pool read APIs (encrypted/public projection only).
+            OpenApiSpec {
+                name: "getShieldedUtxo".to_string(),
+                request: Some(
+                    crate::api::method::get_shielded_utxos::GetShieldedUtxoRequest::schema().1,
+                ),
+                response:
+                    crate::api::method::get_shielded_utxos::ShieldedUtxoResponse::schema().1,
+            },
+            OpenApiSpec {
+                name: "getShieldedUtxosByZone".to_string(),
+                request: Some(
+                    crate::api::method::get_shielded_utxos::GetShieldedUtxosByZoneRequest::schema()
+                        .1,
+                ),
+                response:
+                    crate::api::method::get_shielded_utxos::ShieldedUtxoListResponse::schema().1,
+            },
+            OpenApiSpec {
+                name: "getShieldedUtxosBySignature".to_string(),
+                request: Some(
+                    crate::api::method::get_shielded_utxos::GetShieldedUtxosBySignatureRequest::schema()
+                        .1,
+                ),
+                response:
+                    crate::api::method::get_shielded_utxos::ShieldedUtxoListResponse::schema().1,
+            },
+            OpenApiSpec {
+                name: "getShieldedUtxosByTree".to_string(),
+                request: Some(
+                    crate::api::method::get_shielded_utxos::GetShieldedUtxosByTreeRequest::schema()
+                        .1,
+                ),
+                response:
+                    crate::api::method::get_shielded_utxos::ShieldedUtxoListResponse::schema().1,
             },
         ]
     }

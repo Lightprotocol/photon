@@ -446,5 +446,44 @@ fn build_rpc_module(api_and_indexer: PhotonApi) -> Result<RpcModule<PhotonApi>, 
         },
     )?;
 
+    module.register_async_method("getShieldedUtxo", |rpc_params, rpc_context| async move {
+        let api = rpc_context.as_ref();
+        let payload = rpc_params.parse()?;
+        api.get_shielded_utxo(payload).await.map_err(Into::into)
+    })?;
+
+    module.register_async_method(
+        "getShieldedUtxosByZone",
+        |rpc_params, rpc_context| async move {
+            let api = rpc_context.as_ref();
+            let payload = rpc_params.parse()?;
+            api.get_shielded_utxos_by_zone(payload)
+                .await
+                .map_err(Into::into)
+        },
+    )?;
+
+    module.register_async_method(
+        "getShieldedUtxosBySignature",
+        |rpc_params, rpc_context| async move {
+            let api = rpc_context.as_ref();
+            let payload = rpc_params.parse()?;
+            api.get_shielded_utxos_by_signature(payload)
+                .await
+                .map_err(Into::into)
+        },
+    )?;
+
+    module.register_async_method(
+        "getShieldedUtxosByTree",
+        |rpc_params, rpc_context| async move {
+            let api = rpc_context.as_ref();
+            let payload = rpc_params.parse()?;
+            api.get_shielded_utxos_by_tree(payload)
+                .await
+                .map_err(Into::into)
+        },
+    )?;
+
     Ok(module)
 }
