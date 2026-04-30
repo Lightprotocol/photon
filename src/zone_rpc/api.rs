@@ -8,6 +8,8 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
+use light_compressed_account::hash_to_bn254_field_size_be;
+use num_bigint::BigUint;
 use sea_orm::{DatabaseConnection, EntityTrait, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -29,7 +31,7 @@ use crate::api::method::utils::HashRequest;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::common::typedefs::serializable_signature::SerializableSignature;
-use crate::dao::generated::{tree_metadata, zone_configs};
+use crate::dao::generated::{accounts, tree_metadata, zone_configs};
 use crate::zone_rpc::jobs::{LocalZoneJobStore, ZoneJobKind};
 use crate::zone_rpc::private_api::{
     GetZoneUtxosByOwnerHashRequest, GetZoneUtxosByOwnerPubkeyRequest,
@@ -145,6 +147,9 @@ pub struct ProofInputUtxoView {
     pub utxo_hash: String,
     pub spend_nullifier: Option<String>,
     pub compressed_account_hash: String,
+    pub account_owner_hash: String,
+    pub account_tree_hash: String,
+    pub account_discriminator: String,
     pub compressed_output_index: u32,
     pub utxo_tree: String,
     pub leaf_index: u64,
@@ -487,6 +492,11 @@ impl ZoneRpcApi {
 
             let compressed_account_hash_bytes =
                 decode_hex_32(&record.compressed_account_hash, "compressedAccountHash")?;
+            let account_binding = fetch_light_account_binding(
+                self.photon_conn.as_ref(),
+                &compressed_account_hash_bytes,
+            )
+            .await?;
             let compressed_account_proof = match get_compressed_account_proof_v2(
                 self.photon_conn.as_ref(),
                 HashRequest {
@@ -512,6 +522,9 @@ impl ZoneRpcApi {
                     .as_ref()
                     .map(|nullifiers| hex_encode(&nullifiers[index])),
                 compressed_account_hash: record.compressed_account_hash,
+                account_owner_hash: account_binding.owner_hash,
+                account_tree_hash: account_binding.tree_hash,
+                account_discriminator: account_binding.discriminator,
                 compressed_output_index: record.compressed_output_index,
                 utxo_tree: record.utxo_tree,
                 leaf_index: record.leaf_index,
@@ -780,6 +793,48 @@ fn aggregate_proof_job_status(proof_jobs: &[ZoneProofJobView]) -> ZoneJobStatus 
         return ZoneJobStatus::Running;
     }
     ZoneJobStatus::Queued
+}
+
+struct LightAccountBindingView {
+    owner_hash: String,
+    tree_hash: String,
+    discriminator: String,
+}
+
+async fn fetch_light_account_binding(
+    conn: &DatabaseConnection,
+    compressed_account_hash: &[u8; 32],
+) -> Result<LightAccountBindingView, ZoneRpcApiError> {
+    let account = accounts::Entity::find_by_id(compressed_account_hash.to_vec())
+        .one(conn)
+        .await
+        .map_err(|err| ZoneRpcApiError::Photon(err.to_string()))?
+        .ok_or_else(|| {
+            ZoneRpcApiError::ProofInputUnavailable(format!(
+                "compressed account {} is not indexed by Photon",
+                hex_encode(compressed_account_hash)
+            ))
+        })?;
+
+    let discriminator = account.discriminator_v2.ok_or_else(|| {
+        ZoneRpcApiError::ProofInputUnavailable(format!(
+            "compressed account {} has no account data discriminator",
+            hex_encode(compressed_account_hash)
+        ))
+    })?;
+    if discriminator.len() != 8 {
+        return Err(ZoneRpcApiError::Photon(format!(
+            "compressed account {} discriminator_v2 must be 8 bytes, got {}",
+            hex_encode(compressed_account_hash),
+            discriminator.len()
+        )));
+    }
+
+    Ok(LightAccountBindingView {
+        owner_hash: decimal_from_field_bytes(&hash_to_bn254_field_size_be(&account.owner)),
+        tree_hash: decimal_from_field_bytes(&hash_to_bn254_field_size_be(&account.tree)),
+        discriminator: BigUint::from_bytes_be(&discriminator).to_str_radix(10),
+    })
 }
 
 fn compressed_account_proof_view(
@@ -1249,6 +1304,10 @@ fn hex_encode(bytes: &[u8]) -> String {
         out.push(nibble_to_hex(byte & 0x0f));
     }
     out
+}
+
+fn decimal_from_field_bytes(bytes: &[u8; 32]) -> String {
+    BigUint::from_bytes_be(bytes).to_str_radix(10)
 }
 
 fn nibble_to_hex(n: u8) -> char {

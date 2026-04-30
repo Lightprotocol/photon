@@ -15,8 +15,10 @@
 use ark_bn254::Fr;
 use borsh::BorshSerialize;
 use light_compressed_account::{
+    compressed_account::{CompressedAccount, CompressedAccountData},
     constants::{LIGHT_SYSTEM_PROGRAM_ID, REGISTERED_PROGRAM_PDA},
     discriminators::{DISCRIMINATOR_INSERT_INTO_QUEUES, DISCRIMINATOR_INVOKE_CPI},
+    hash_to_bn254_field_size_be,
     instruction_data::{
         data::OutputCompressedAccountWithPackedContext as LightOutputCompressedAccountWithPackedContext,
         insert_into_queues::{
@@ -48,7 +50,13 @@ const FIXTURE_UTXO_TREE: [u8; 32] = [0xAB; 32];
 const FIXTURE_TREE_SEQUENCE: u64 = 1;
 const FIXTURE_LEAF_INDEX_BASE: u32 = 0;
 const FIXTURE_ROOT_HISTORY_CAPACITY: u64 = 64;
-const FIXTURE_COMPRESSED_ACCOUNT_DISCRIMINATOR: [u8; 8] = *b"shldutxo";
+const FIXTURE_COMPRESSED_ACCOUNT_DISCRIMINATOR: [u8; 8] = *b"shldutx1";
+const FIXTURE_MASP_PROGRAM_ID: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x10,
+];
+const FIXTURE_MASP_INPUT_SEED: u64 = 0x1001;
+const FIXTURE_MASP_OUTPUT_SEED: u64 = 0x5001;
 
 /// Owner identifiers and amounts for one fixture output. Plaintext-only;
 /// production events never carry these fields directly.
@@ -102,14 +110,7 @@ impl FixtureBuilder {
 
     pub fn build(self) -> DummyShieldedPoolFixture {
         // Domain tag is a small constant — safe in BN254 Fr.
-        let domain: u8 = 1;
-        // Reduce the zone hash mod the BN254 Fr modulus (top byte cleared)
-        // before hashing so light-poseidon does not reject it as
-        // out-of-field. The canonical event still carries the unmodified
-        // 32-byte value for routing/lookup; only the hash inputs are
-        // reduced.
-        let zone_for_hash = clear_top_byte(self.zone_config_hash);
-
+        let domain: u8 = 0;
         // Build plaintext payloads + matching utxo_hash values. The plan
         // calls for the Zone RPC sidecar to verify hash(plaintext) ==
         // utxo_hash even in dev mode, so we compute the same digest the
@@ -121,9 +122,9 @@ impl FixtureBuilder {
         let mut output_events = Vec::with_capacity(self.outputs.len());
 
         for (idx, owner) in self.outputs.iter().enumerate() {
-            let owner_pubkey_field = clear_top_byte(owner.owner_pubkey);
-            let owner_hash = poseidon_hash(&[&owner_pubkey_field]).expect("poseidon owner_hash");
-            let data_hash = [0u8; 32];
+            let owner_hash = fixture_masp_program_owner_hash();
+            let data_hash = fixture_masp_data_hash(owner.token_mint, self.zone_config_hash)
+                .expect("fixture data_hash");
             let extended_data: Vec<u8> = vec![];
             let payload = FixturePlaintextPayload {
                 domain,
@@ -137,12 +138,10 @@ impl FixtureBuilder {
                 extended_data: extended_data.clone(),
                 zone_config_hash: self.zone_config_hash,
             };
-            // Canonical UTXO commitment: Poseidon over the plaintext
-            // fields the production circuit will hash. We deliberately keep
-            // the exact field set conservative — extending it later will
-            // be a migration with a fresh fixture.
-            let utxo_hash =
-                utxo_hash_for_payload_with_zone(&payload, &zone_for_hash).expect("utxo_hash");
+            // Canonical local/dev UTXO commitment: the same MASP UtxoHash
+            // currently constrained by prover/server. Zone/token context is
+            // bound through data_hash for this fixture.
+            let utxo_hash = utxo_hash_for_payload(&payload).expect("utxo_hash");
 
             // Encrypted ciphertext is dummy bytes. The plan explicitly does
             // not require real encryption for the first vertical slice;
@@ -283,6 +282,30 @@ pub fn fixture_leaf_index_base() -> u32 {
     FIXTURE_LEAF_INDEX_BASE
 }
 
+pub fn fixture_light_account_owner_hash() -> [u8; 32] {
+    hash_to_bn254_field_size_be(&SHIELDED_POOL_TEST_PROGRAM_ID.to_bytes())
+}
+
+pub fn fixture_light_account_tree_hash() -> [u8; 32] {
+    hash_to_bn254_field_size_be(&FIXTURE_UTXO_TREE)
+}
+
+pub fn fixture_light_account_discriminator() -> [u8; 8] {
+    FIXTURE_COMPRESSED_ACCOUNT_DISCRIMINATOR
+}
+
+pub fn fixture_masp_program_id() -> [u8; 32] {
+    FIXTURE_MASP_PROGRAM_ID
+}
+
+pub fn fixture_masp_input_seed() -> u64 {
+    FIXTURE_MASP_INPUT_SEED
+}
+
+pub fn fixture_masp_output_seed() -> u64 {
+    FIXTURE_MASP_OUTPUT_SEED
+}
+
 fn light_fixture_output_accounts(
     event: &ShieldedPoolTxEvent,
 ) -> Vec<LightOutputCompressedAccountWithPackedContext> {
@@ -290,18 +313,7 @@ fn light_fixture_output_accounts(
         .outputs
         .iter()
         .map(|output| LightOutputCompressedAccountWithPackedContext {
-            compressed_account: light_compressed_account::compressed_account::CompressedAccount {
-                owner: LightPubkey::from(SHIELDED_POOL_TEST_PROGRAM_ID.to_bytes()),
-                lamports: 0,
-                address: None,
-                data: Some(
-                    light_compressed_account::compressed_account::CompressedAccountData {
-                        discriminator: FIXTURE_COMPRESSED_ACCOUNT_DISCRIMINATOR,
-                        data: Vec::new(),
-                        data_hash: output.utxo_hash,
-                    },
-                ),
-            },
+            compressed_account: light_fixture_compressed_account(&output.utxo_hash),
             merkle_tree_index: 0,
         })
         .collect()
@@ -434,10 +446,23 @@ pub fn fixture_compressed_output_contexts(
 }
 
 fn fixture_compressed_account_hash(output_index: usize, utxo_hash: &[u8; 32]) -> [u8; 32] {
-    let mut hash = [0xD0; 32];
-    hash[..4].copy_from_slice(&(output_index as u32).to_be_bytes());
-    hash[4..].copy_from_slice(&utxo_hash[..28]);
-    hash
+    let leaf_index = FIXTURE_LEAF_INDEX_BASE + output_index as u32;
+    light_fixture_compressed_account(utxo_hash)
+        .hash(&LightPubkey::from(FIXTURE_UTXO_TREE), &leaf_index, true)
+        .expect("fixture compressed account hash")
+}
+
+fn light_fixture_compressed_account(utxo_hash: &[u8; 32]) -> CompressedAccount {
+    CompressedAccount {
+        owner: LightPubkey::from(SHIELDED_POOL_TEST_PROGRAM_ID.to_bytes()),
+        lamports: 0,
+        address: None,
+        data: Some(CompressedAccountData {
+            discriminator: FIXTURE_COMPRESSED_ACCOUNT_DISCRIMINATOR,
+            data: Vec::new(),
+            data_hash: *utxo_hash,
+        }),
+    }
 }
 
 /// Compute the canonical UTXO commitment over the plaintext fields. This
@@ -445,29 +470,37 @@ fn fixture_compressed_account_hash(output_index: usize, utxo_hash: &[u8; 32]) ->
 /// Zone RPC projection re-checks. Inputs are reduced into BN254 Fr (top
 /// byte cleared) since light-poseidon rejects out-of-field bytes.
 pub fn utxo_hash_for_payload(payload: &FixturePlaintextPayload) -> Result<[u8; 32], String> {
-    let zone_for_hash = clear_top_byte(payload.zone_config_hash);
-    utxo_hash_for_payload_with_zone(payload, &zone_for_hash)
+    utxo_hash_for_payload_fields(payload)
 }
 
-fn utxo_hash_for_payload_with_zone(
-    payload: &FixturePlaintextPayload,
-    zone_for_hash: &[u8; 32],
-) -> Result<[u8; 32], String> {
+fn utxo_hash_for_payload_fields(payload: &FixturePlaintextPayload) -> Result<[u8; 32], String> {
     let mut domain_bytes = [0u8; 32];
     domain_bytes[31] = payload.domain;
-    let token_mint_field = clear_top_byte(payload.token_mint);
     let blinding_field = clear_top_byte(payload.blinding);
     let spl_bytes = u128_to_be_32(payload.spl_amount as u128);
     let sol_bytes = u128_to_be_32(payload.sol_amount as u128);
     poseidon_hash(&[
         &domain_bytes,
         &payload.owner_hash,
-        &token_mint_field,
         &spl_bytes,
         &sol_bytes,
         &blinding_field,
-        zone_for_hash,
+        &payload.data_hash,
     ])
+}
+
+fn fixture_masp_program_owner_hash() -> [u8; 32] {
+    let seed = u128_to_be_32(FIXTURE_MASP_INPUT_SEED as u128);
+    poseidon_hash(&[&FIXTURE_MASP_PROGRAM_ID, &seed]).expect("fixture MASP program owner hash")
+}
+
+fn fixture_masp_data_hash(
+    token_mint: [u8; 32],
+    zone_config_hash: [u8; 32],
+) -> Result<[u8; 32], String> {
+    let token_mint_field = clear_top_byte(token_mint);
+    let zone_field = clear_top_byte(zone_config_hash);
+    poseidon_hash(&[&token_mint_field, &zone_field])
 }
 
 fn clear_top_byte(bytes: [u8; 32]) -> [u8; 32] {

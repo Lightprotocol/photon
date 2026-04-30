@@ -1,7 +1,9 @@
+use ark_bn254::Fr;
 use function_name::named;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 use light_compressed_account::TreeType;
+use light_poseidon::{Poseidon, PoseidonBytesHasher};
 use num_bigint::BigUint;
 use photon_indexer::common::typedefs::serializable_pubkey::SerializablePubkey;
 use photon_indexer::dao::generated::{
@@ -11,11 +13,14 @@ use photon_indexer::dao::generated::{
 use photon_indexer::ingester::parser::{
     parse_transaction,
     shielded_pool_test_fixture::{
-        fixture_leaf_index_base, fixture_tree_sequence, fixture_utxo_tree, FixtureBuilder,
-        FixtureOwnerSpec,
+        fixture_leaf_index_base, fixture_light_account_discriminator,
+        fixture_light_account_owner_hash, fixture_light_account_tree_hash, fixture_masp_input_seed,
+        fixture_masp_output_seed, fixture_masp_program_id, fixture_tree_sequence,
+        fixture_utxo_tree, DummyShieldedPoolFixture, FixtureBuilder, FixtureOwnerSpec,
     },
     TreeResolver,
 };
+use photon_indexer::ingester::persist::{compute_parent_hash, persisted_state_tree::ZERO_BYTES};
 use photon_indexer::zone_rpc::api::{
     FetchDecryptedUtxosRequest, FetchProofInputsRequest, FetchProofInputsResponse,
     FetchProofsRequest, FetchUtxosRequest, GetProofJobRequest, GetRelayerJobRequest,
@@ -34,7 +39,7 @@ use photon_indexer::zone_rpc::workers::{
     DecryptOutputsRequest, Decryptor, EncryptedUtxoInput, LocalPassthroughDecryptor,
 };
 use sea_orm::{ColumnTrait, Database, EntityTrait, PaginatorTrait, QueryFilter, Set};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serial_test::serial;
 use solana_signature::Signature;
@@ -45,18 +50,102 @@ use std::time::Duration;
 use crate::utils::*;
 
 const FIXTURE_NULLIFIER_TREE: [u8; 32] = [0xCD; 32];
-const FIXTURE_SPEND_NULLIFIER: [u8; 32] = [0x10; 32];
-const FIXTURE_NULLIFIER_LOW_VALUE: [u8; 32] = [0x01; 32];
-const FIXTURE_NULLIFIER_NEXT_VALUE: [u8; 32] = [0x20; 32];
 const FIXTURE_NULLIFIER_ROOT_SEQUENCE: u64 = 11;
 const FIXTURE_TREE_HEIGHT: i32 = 40;
 const FIXTURE_ROOT_HISTORY_CAPACITY: i64 = 64;
-const FIXTURE_NULLIFIER_ROOT: [u8; 32] = [0x92; 32];
+const FIXTURE_MASP_NULLIFIER_SECRET: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x0b,
+];
+const FIXTURE_MASP_TX_BLINDING: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x0c,
+];
+const FIXTURE_MASP_OUTPUT_BLINDING: [u8; 32] = [0xDD; 32];
 
 #[derive(Debug, Deserialize)]
 struct MaspLocalDevProofRequests {
     utxo: serde_json::Value,
     tree: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+struct LocalMaspWitnessSecrets {
+    payloads: Vec<LocalMaspInputSecret>,
+    output_blinding: [u8; 32],
+    output_seed: u64,
+    nullifier_secret: [u8; 32],
+    tx_blinding: [u8; 32],
+}
+
+#[derive(Debug, Clone)]
+struct LocalMaspInputSecret {
+    owner: [u8; 32],
+    spl_amount: u64,
+    sol_amount: u64,
+    blinding: [u8; 32],
+    data_hash: [u8; 32],
+    program_id: [u8; 32],
+    seed: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalMaspZoneFixtureSpec {
+    root_context: serde_json::Value,
+    operation_commitment: String,
+    nullifier_secret: String,
+    tx_blinding: String,
+    inputs: Vec<LocalMaspZoneInputSpec>,
+    outputs: Vec<LocalMaspZoneOutputSpec>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalMaspZoneInputSpec {
+    owner: String,
+    spl: String,
+    sol: String,
+    blinding: String,
+    data_hash: String,
+    seed: String,
+    program_id: String,
+    leaf_index: String,
+    account_owner_hash: String,
+    account_tree_hash: String,
+    account_discriminator: String,
+    state_root: String,
+    state_path: Vec<String>,
+    state_dirs: Vec<u8>,
+    nullifier_root: String,
+    nf_low_value: String,
+    nf_next_value: String,
+    nf_low_path: Vec<String>,
+    nf_low_dirs: Vec<u8>,
+    expected_utxo_hash: String,
+    expected_spend_nullifier: String,
+    expected_compressed_account_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalMaspZoneOutputSpec {
+    owner: String,
+    spl: String,
+    sol: String,
+    blinding: String,
+    data_hash: String,
+    owner_is_program: String,
+    owner_program_index: String,
+    seed: String,
+}
+
+#[derive(Debug, Clone)]
+struct LocalNullifierContext {
+    spend_nullifier: [u8; 32],
+    low_value: [u8; 32],
+    next_value: [u8; 32],
+    root: [u8; 32],
 }
 
 #[named]
@@ -86,6 +175,7 @@ async fn test_shielded_pool_dummy_event_to_zone_rpc_wiring_sqlite() {
         .zone_config_hash
         .expect("fixture must be zoned");
     let output = &fixture.event.outputs[0];
+    let nullifier_context = local_nullifier_context_for_fixture(&fixture, 0);
 
     seed_local_fixture_tree_metadata(setup.db_conn.as_ref()).await;
     let mut resolver = TreeResolver::new(setup.client.as_ref());
@@ -129,7 +219,7 @@ async fn test_shielded_pool_dummy_event_to_zone_rpc_wiring_sqlite() {
     persist_state_update_using_connection(setup.db_conn.as_ref(), state_update.clone())
         .await
         .expect("re-indexing the same shielded event should be idempotent");
-    seed_local_nullifier_context(setup.db_conn.as_ref()).await;
+    seed_local_nullifier_context(setup.db_conn.as_ref(), &nullifier_context).await;
 
     let persisted_account = accounts::Entity::find_by_id(
         state_update.shielded_outputs[0]
@@ -321,7 +411,7 @@ async fn test_shielded_pool_dummy_event_to_zone_rpc_wiring_sqlite() {
         .fetch_proof_inputs(FetchProofInputsRequest {
             zone_config_hash: hex_0x(&zone_config_hash),
             input_utxo_hashes: vec![hex_0x(&output.utxo_hash)],
-            spend_nullifiers: vec![hex_0x(&FIXTURE_SPEND_NULLIFIER)],
+            spend_nullifiers: vec![hex_0x(&nullifier_context.spend_nullifier)],
             nullifier_tree: Some(SerializablePubkey::from(FIXTURE_NULLIFIER_TREE)),
             utxo_root_sequence: Some(fixture_tree_sequence()),
             nullifier_root_sequence: Some(FIXTURE_NULLIFIER_ROOT_SEQUENCE),
@@ -340,6 +430,20 @@ async fn test_shielded_pool_dummy_event_to_zone_rpc_wiring_sqlite() {
     assert_eq!(
         proof_inputs.inputs[0].compressed_account_hash,
         public_record.compressed_account_hash
+    );
+    assert_eq!(
+        proof_inputs.inputs[0].account_owner_hash,
+        decimal_from_bytes(&fixture_light_account_owner_hash())
+    );
+    assert_eq!(
+        proof_inputs.inputs[0].account_tree_hash,
+        decimal_from_bytes(&fixture_light_account_tree_hash())
+    );
+    assert_eq!(
+        proof_inputs.inputs[0].account_discriminator,
+        decimal_from_bytes(&discriminator_field_bytes(
+            fixture_light_account_discriminator()
+        ))
     );
     assert_eq!(
         proof_inputs.inputs[0].compressed_output_index,
@@ -401,7 +505,7 @@ async fn test_shielded_pool_dummy_event_to_zone_rpc_wiring_sqlite() {
         root_context.nullifier_tree_id,
         hex_0x(&FIXTURE_NULLIFIER_TREE)
     );
-    assert_eq!(root_context.nullifier_root, hex_0x(&FIXTURE_NULLIFIER_ROOT));
+    assert_eq!(root_context.nullifier_root, hex_0x(&nullifier_context.root));
     assert_eq!(
         root_context.nullifier_root_index,
         FIXTURE_NULLIFIER_ROOT_SEQUENCE % FIXTURE_ROOT_HISTORY_CAPACITY as u64
@@ -429,12 +533,15 @@ async fn test_shielded_pool_dummy_event_to_zone_rpc_wiring_sqlite() {
         .nullifier_non_inclusion_proof
         .as_ref()
         .expect("seeded local fixture should produce nullifier non-inclusion proof");
-    assert_eq!(nullifier_proof.nullifier, hex_0x(&FIXTURE_SPEND_NULLIFIER));
+    assert_eq!(
+        nullifier_proof.nullifier,
+        hex_0x(&nullifier_context.spend_nullifier)
+    );
     assert_eq!(
         nullifier_proof.nullifier_tree,
         SerializablePubkey::from(FIXTURE_NULLIFIER_TREE)
     );
-    assert_eq!(nullifier_proof.root, hex_0x(&FIXTURE_NULLIFIER_ROOT));
+    assert_eq!(nullifier_proof.root, hex_0x(&nullifier_context.root));
     assert_eq!(
         nullifier_proof.root_sequence,
         FIXTURE_NULLIFIER_ROOT_SEQUENCE
@@ -445,11 +552,11 @@ async fn test_shielded_pool_dummy_event_to_zone_rpc_wiring_sqlite() {
     );
     assert_eq!(
         nullifier_proof.low_value,
-        hex_0x(&FIXTURE_NULLIFIER_LOW_VALUE)
+        hex_0x(&nullifier_context.low_value)
     );
     assert_eq!(
         nullifier_proof.next_value,
-        hex_0x(&FIXTURE_NULLIFIER_NEXT_VALUE)
+        hex_0x(&nullifier_context.next_value)
     );
 
     let proof_requests = local_stub_masp_proof_requests(&proof_inputs, &decrypted);
@@ -569,7 +676,10 @@ async fn seed_local_fixture_tree_metadata(conn: &sea_orm::DatabaseConnection) {
     .expect("local fixture should seed UTXO tree metadata");
 }
 
-async fn seed_local_nullifier_context(conn: &sea_orm::DatabaseConnection) {
+async fn seed_local_nullifier_context(
+    conn: &sea_orm::DatabaseConnection,
+    context: &LocalNullifierContext,
+) {
     tree_metadata::Entity::insert(tree_metadata::ActiveModel {
         tree_pubkey: Set(FIXTURE_NULLIFIER_TREE.to_vec()),
         queue_pubkey: Set([0xD0; 32].to_vec()),
@@ -589,7 +699,7 @@ async fn seed_local_nullifier_context(conn: &sea_orm::DatabaseConnection) {
         node_idx: Set(1),
         leaf_idx: Set(None),
         level: Set(FIXTURE_TREE_HEIGHT as i64),
-        hash: Set(FIXTURE_NULLIFIER_ROOT.to_vec()),
+        hash: Set(context.root.to_vec()),
         seq: Set(Some(FIXTURE_NULLIFIER_ROOT_SEQUENCE as i64)),
     }])
     .exec(conn)
@@ -599,9 +709,9 @@ async fn seed_local_nullifier_context(conn: &sea_orm::DatabaseConnection) {
     indexed_trees::Entity::insert(indexed_trees::ActiveModel {
         tree: Set(FIXTURE_NULLIFIER_TREE.to_vec()),
         leaf_index: Set(0),
-        value: Set(FIXTURE_NULLIFIER_LOW_VALUE.to_vec()),
+        value: Set(context.low_value.to_vec()),
         next_index: Set(1),
-        next_value: Set(FIXTURE_NULLIFIER_NEXT_VALUE.to_vec()),
+        next_value: Set(context.next_value.to_vec()),
         seq: Set(Some(FIXTURE_NULLIFIER_ROOT_SEQUENCE as i64)),
     })
     .exec(conn)
@@ -635,19 +745,12 @@ fn local_stub_masp_proof_requests(
     ]
 }
 
-fn masp_proof_requests_from_generated_templates(
-    proof_inputs: &FetchProofInputsResponse,
+fn masp_proof_requests_from_local_dev_fixtures(
     fixtures: MaspLocalDevProofRequests,
 ) -> Vec<ProverProofRequest> {
     vec![
-        proof_request_from_payload(
-            "masp-utxo",
-            patch_masp_payload_from_zone_inputs("masp-utxo", fixtures.utxo, proof_inputs),
-        ),
-        proof_request_from_payload(
-            "masp-tree",
-            patch_masp_payload_from_zone_inputs("masp-tree", fixtures.tree, proof_inputs),
-        ),
+        proof_request_from_payload("masp-utxo", fixtures.utxo),
+        proof_request_from_payload("masp-tree", fixtures.tree),
     ]
 }
 
@@ -657,12 +760,24 @@ fn masp_tree_payload_from_zone_inputs(
     let inputs = proof_inputs.inputs.as_slice();
     assert!(!inputs.is_empty(), "MASP tree request requires inputs");
 
-    // Current MASP names this value `inCommit`. In the Light compressed-account
-    // path this is the state-tree leaf hash; production MASP must also bind it
-    // to the private UTXO commitment used by the UTXO proof.
+    // Local stub payload only exercises the Zone RPC -> prover boundary. Keep
+    // it structurally aligned with the real MASP request even though the stub
+    // server does not validate the witness.
     let in_commit = inputs
         .iter()
-        .map(|input| decimal_from_hex_0x(&input.compressed_account_hash))
+        .map(|input| decimal_from_hex_0x(&input.utxo_hash))
+        .collect::<Vec<_>>();
+    let account_owner_hash = inputs
+        .iter()
+        .map(|input| input.account_owner_hash.clone())
+        .collect::<Vec<_>>();
+    let account_tree_hash = inputs
+        .iter()
+        .map(|input| input.account_tree_hash.clone())
+        .collect::<Vec<_>>();
+    let account_discriminator = inputs
+        .iter()
+        .map(|input| input.account_discriminator.clone())
         .collect::<Vec<_>>();
     let state_path = inputs
         .iter()
@@ -785,6 +900,9 @@ fn masp_tree_payload_from_zone_inputs(
         "publicInputsHash": "1",
         "localWitness": {
             "inCommit": in_commit,
+            "accountOwnerHash": account_owner_hash,
+            "accountTreeHash": account_tree_hash,
+            "accountDiscriminator": account_discriminator,
             "statePath": state_path,
             "stateDirs": state_dirs,
             "domainDns": vec!["1".to_string(); inputs.len()],
@@ -884,27 +1002,119 @@ fn decrypted_inputs_for_proof_order<'a>(
         .collect()
 }
 
-fn patch_masp_payload_from_zone_inputs(
-    circuit_type: &str,
-    mut payload: serde_json::Value,
+fn local_masp_zone_fixture_spec(
     proof_inputs: &FetchProofInputsResponse,
-) -> serde_json::Value {
+    decrypted_inputs: &[ZoneDecryptedUtxoView],
+    secrets: &LocalMaspWitnessSecrets,
+) -> LocalMaspZoneFixtureSpec {
+    let ordered_inputs = decrypted_inputs_for_proof_order(proof_inputs, decrypted_inputs);
     assert_eq!(
-        payload
-            .get("circuitType")
-            .and_then(serde_json::Value::as_str),
-        Some(circuit_type)
+        ordered_inputs.len(),
+        secrets.payloads.len(),
+        "local/dev MASP secrets must match proof input count"
     );
-    let object = payload
-        .as_object_mut()
-        .expect("generated MASP payload must be a JSON object");
-    object.insert("rootContext".to_string(), root_context_json(proof_inputs));
-    object.insert(
-        "operationCommitment".to_string(),
-        json!(operation_commitment_from_inputs(proof_inputs)),
-    );
-    object.insert("nInputs".to_string(), json!(proof_inputs.inputs.len()));
-    payload
+    let account_owner_hash = decimal_from_bytes(&fixture_light_account_owner_hash());
+    let account_tree_hash = decimal_from_bytes(&fixture_light_account_tree_hash());
+    let account_discriminator = decimal_from_bytes(&discriminator_field_bytes(
+        fixture_light_account_discriminator(),
+    ));
+
+    let inputs = proof_inputs
+        .inputs
+        .iter()
+        .zip(ordered_inputs.iter())
+        .zip(secrets.payloads.iter())
+        .map(|((proof_input, decrypted), secret)| {
+            assert_eq!(proof_input.account_owner_hash, account_owner_hash);
+            assert_eq!(proof_input.account_tree_hash, account_tree_hash);
+            assert_eq!(proof_input.account_discriminator, account_discriminator);
+            assert_eq!(decrypted.owner_hash, hex_0x(&secret.owner));
+            assert_eq!(decrypted.data_hash, hex_0x(&secret.data_hash));
+            let state_proof = proof_input
+                .compressed_account_proof
+                .as_ref()
+                .expect("local/dev MASP requires compressed account proof");
+            let nullifier_proof = proof_input
+                .nullifier_non_inclusion_proof
+                .as_ref()
+                .expect("local/dev MASP requires nullifier proof");
+            LocalMaspZoneInputSpec {
+                owner: decimal_from_bytes(&secret.owner),
+                spl: secret.spl_amount.to_string(),
+                sol: secret.sol_amount.to_string(),
+                blinding: decimal_from_bytes(&secret.blinding),
+                data_hash: decimal_from_bytes(&secret.data_hash),
+                seed: secret.seed.to_string(),
+                program_id: decimal_from_bytes(&secret.program_id),
+                leaf_index: proof_input.leaf_index.to_string(),
+                account_owner_hash: proof_input.account_owner_hash.clone(),
+                account_tree_hash: proof_input.account_tree_hash.clone(),
+                account_discriminator: proof_input.account_discriminator.clone(),
+                state_root: decimal_from_hex_0x(&state_proof.root),
+                state_path: state_proof
+                    .proof
+                    .iter()
+                    .map(|node| decimal_from_hex_0x(node))
+                    .collect(),
+                state_dirs: state_proof.path_directions.clone(),
+                nullifier_root: decimal_from_hex_0x(&nullifier_proof.root),
+                nf_low_value: decimal_from_hex_0x(&nullifier_proof.low_value),
+                nf_next_value: decimal_from_hex_0x(&nullifier_proof.next_value),
+                nf_low_path: nullifier_proof
+                    .proof
+                    .iter()
+                    .map(|node| decimal_from_hex_0x(node))
+                    .collect(),
+                nf_low_dirs: nullifier_proof.path_directions.clone(),
+                expected_utxo_hash: decimal_from_hex_0x(&proof_input.utxo_hash),
+                expected_spend_nullifier: decimal_from_hex_0x(
+                    proof_input
+                        .spend_nullifier
+                        .as_ref()
+                        .expect("local/dev MASP requires spend nullifier"),
+                ),
+                expected_compressed_account_hash: decimal_from_hex_0x(
+                    &proof_input.compressed_account_hash,
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let total_spl = secrets
+        .payloads
+        .iter()
+        .map(|input| BigUint::from(input.spl_amount))
+        .fold(BigUint::from(0u8), |acc, value| acc + value)
+        .to_str_radix(10);
+    let total_sol = secrets
+        .payloads
+        .iter()
+        .map(|input| BigUint::from(input.sol_amount))
+        .fold(BigUint::from(0u8), |acc, value| acc + value)
+        .to_str_radix(10);
+    let first_input = secrets
+        .payloads
+        .first()
+        .expect("local/dev MASP requires one input secret");
+    let output_owner = masp_program_owner_hash(&first_input.program_id, secrets.output_seed);
+
+    LocalMaspZoneFixtureSpec {
+        root_context: root_context_json(proof_inputs),
+        operation_commitment: operation_commitment_from_inputs(proof_inputs),
+        nullifier_secret: decimal_from_bytes(&secrets.nullifier_secret),
+        tx_blinding: decimal_from_bytes(&secrets.tx_blinding),
+        inputs,
+        outputs: vec![LocalMaspZoneOutputSpec {
+            owner: decimal_from_bytes(&output_owner),
+            spl: total_spl,
+            sol: total_sol,
+            blinding: decimal_from_bytes(&secrets.output_blinding),
+            data_hash: decimal_from_bytes(&first_input.data_hash),
+            owner_is_program: "1".to_string(),
+            owner_program_index: "0".to_string(),
+            seed: secrets.output_seed.to_string(),
+        }],
+    }
 }
 
 fn root_context_json(proof_inputs: &FetchProofInputsResponse) -> serde_json::Value {
@@ -951,6 +1161,120 @@ fn sum_decimal_strings<'a>(values: impl Iterator<Item = &'a str>) -> String {
         .to_str_radix(10)
 }
 
+fn local_masp_witness_secrets(fixture: &DummyShieldedPoolFixture) -> LocalMaspWitnessSecrets {
+    LocalMaspWitnessSecrets {
+        payloads: fixture
+            .sidecar
+            .payloads
+            .iter()
+            .map(|payload| LocalMaspInputSecret {
+                owner: payload.owner_hash,
+                spl_amount: payload.spl_amount,
+                sol_amount: payload.sol_amount,
+                blinding: field_bytes(payload.blinding),
+                data_hash: payload.data_hash,
+                program_id: fixture_masp_program_id(),
+                seed: fixture_masp_input_seed(),
+            })
+            .collect(),
+        output_blinding: field_bytes(FIXTURE_MASP_OUTPUT_BLINDING),
+        output_seed: fixture_masp_output_seed(),
+        nullifier_secret: FIXTURE_MASP_NULLIFIER_SECRET,
+        tx_blinding: FIXTURE_MASP_TX_BLINDING,
+    }
+}
+
+fn local_nullifier_context_for_fixture(
+    fixture: &DummyShieldedPoolFixture,
+    output_index: usize,
+) -> LocalNullifierContext {
+    let output = fixture
+        .event
+        .outputs
+        .get(output_index)
+        .expect("fixture output exists");
+    let leaf_index = fixture_leaf_index_base() as u64 + output_index as u64;
+    let domain_dns = poseidon_hash_fields(&[&output.utxo_hash, &fixture_masp_program_id()]);
+    let leaf_index_bytes = u64_to_be_32(leaf_index);
+    let spend_nullifier =
+        poseidon_hash_fields(&[&output.utxo_hash, &leaf_index_bytes, &domain_dns]);
+    let spend_nullifier_int = BigUint::from_bytes_be(&spend_nullifier);
+    assert!(
+        spend_nullifier_int > BigUint::from(0u8),
+        "fixture spend nullifier must not underflow low range"
+    );
+    let low_value = biguint_to_32(&(spend_nullifier_int.clone() - BigUint::from(1u8)));
+    let next_value = biguint_to_32(&(spend_nullifier_int + BigUint::from(1u8)));
+    let low_leaf = poseidon_hash_fields(&[&low_value, &next_value]);
+    let root = fold_leftmost_leaf_to_root(low_leaf);
+    LocalNullifierContext {
+        spend_nullifier,
+        low_value,
+        next_value,
+        root,
+    }
+}
+
+fn masp_program_owner_hash(program_id: &[u8; 32], seed: u64) -> [u8; 32] {
+    let seed = u64_to_be_32(seed);
+    poseidon_hash_fields(&[program_id, &seed])
+}
+
+fn fold_leftmost_leaf_to_root(leaf: [u8; 32]) -> [u8; 32] {
+    let mut current = leaf.to_vec();
+    for sibling in ZERO_BYTES.iter().take(FIXTURE_TREE_HEIGHT as usize) {
+        current = compute_parent_hash(current, sibling.to_vec())
+            .expect("fixture nullifier root fold should hash");
+    }
+    current
+        .try_into()
+        .expect("fixture nullifier root should be 32 bytes")
+}
+
+fn poseidon_hash_fields(inputs: &[&[u8; 32]]) -> [u8; 32] {
+    let mut hasher =
+        Poseidon::<Fr>::new_circom(inputs.len()).expect("fixture poseidon should initialize");
+    let input_slices = inputs
+        .iter()
+        .map(|input| input.as_slice())
+        .collect::<Vec<_>>();
+    hasher
+        .hash_bytes_be(&input_slices)
+        .expect("fixture poseidon hash should succeed")
+}
+
+fn field_bytes(mut bytes: [u8; 32]) -> [u8; 32] {
+    bytes[0] = 0;
+    bytes
+}
+
+fn discriminator_field_bytes(discriminator: [u8; 8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[24..].copy_from_slice(&discriminator);
+    out
+}
+
+fn u64_to_be_32(value: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[24..].copy_from_slice(&value.to_be_bytes());
+    out
+}
+
+fn biguint_to_32(value: &BigUint) -> [u8; 32] {
+    let bytes = value.to_bytes_be();
+    assert!(
+        bytes.len() <= 32,
+        "fixture field element must fit in 32 bytes"
+    );
+    let mut out = [0u8; 32];
+    out[32 - bytes.len()..].copy_from_slice(&bytes);
+    out
+}
+
+fn decimal_from_bytes(bytes: &[u8; 32]) -> String {
+    BigUint::from_bytes_be(bytes).to_str_radix(10)
+}
+
 async fn zone_rpc_fixture_with_proof_inputs(
     name: &str,
     prover_url: String,
@@ -958,6 +1282,7 @@ async fn zone_rpc_fixture_with_proof_inputs(
     ZoneRpcApi,
     FetchProofInputsResponse,
     Vec<ZoneDecryptedUtxoView>,
+    LocalMaspWitnessSecrets,
 ) {
     let setup = setup_with_options(
         name.to_string(),
@@ -981,6 +1306,7 @@ async fn zone_rpc_fixture_with_proof_inputs(
         .zone_config_hash
         .expect("fixture must be zoned");
     let output = &fixture.event.outputs[0];
+    let nullifier_context = local_nullifier_context_for_fixture(&fixture, 0);
 
     seed_local_fixture_tree_metadata(setup.db_conn.as_ref()).await;
     let mut resolver = TreeResolver::new(setup.client.as_ref());
@@ -1008,7 +1334,7 @@ async fn zone_rpc_fixture_with_proof_inputs(
     persist_state_update_using_connection(setup.db_conn.as_ref(), state_update.clone())
         .await
         .expect("shielded state persist should succeed");
-    seed_local_nullifier_context(setup.db_conn.as_ref()).await;
+    seed_local_nullifier_context(setup.db_conn.as_ref(), &nullifier_context).await;
 
     let private_conn = Database::connect("sqlite::memory:")
         .await
@@ -1070,7 +1396,7 @@ async fn zone_rpc_fixture_with_proof_inputs(
         .fetch_proof_inputs(FetchProofInputsRequest {
             zone_config_hash: hex_0x(&zone_config_hash),
             input_utxo_hashes: vec![hex_0x(&output.utxo_hash)],
-            spend_nullifiers: vec![hex_0x(&FIXTURE_SPEND_NULLIFIER)],
+            spend_nullifiers: vec![hex_0x(&nullifier_context.spend_nullifier)],
             nullifier_tree: Some(SerializablePubkey::from(FIXTURE_NULLIFIER_TREE)),
             utxo_root_sequence: Some(fixture_tree_sequence()),
             nullifier_root_sequence: Some(FIXTURE_NULLIFIER_ROOT_SEQUENCE),
@@ -1084,10 +1410,19 @@ async fn zone_rpc_fixture_with_proof_inputs(
         proof_inputs.root_context_status.unavailable_reasons
     );
 
-    (zone_rpc, proof_inputs, decrypted)
+    (
+        zone_rpc,
+        proof_inputs,
+        decrypted,
+        local_masp_witness_secrets(&fixture),
+    )
 }
 
-fn generate_masp_local_dev_proof_requests() -> MaspLocalDevProofRequests {
+fn generate_masp_local_dev_proof_requests(
+    proof_inputs: &FetchProofInputsResponse,
+    decrypted_inputs: &[ZoneDecryptedUtxoView],
+    secrets: &LocalMaspWitnessSecrets,
+) -> MaspLocalDevProofRequests {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir
         .parent()
@@ -1101,6 +1436,16 @@ fn generate_masp_local_dev_proof_requests() -> MaspLocalDevProofRequests {
         "light-masp-local-dev-proof-requests-{}.json",
         std::process::id()
     ));
+    let spec_path = std::env::temp_dir().join(format!(
+        "light-masp-local-dev-zone-spec-{}.json",
+        std::process::id()
+    ));
+    let spec = local_masp_zone_fixture_spec(proof_inputs, decrypted_inputs, secrets);
+    std::fs::write(
+        &spec_path,
+        serde_json::to_vec_pretty(&spec).expect("local/dev MASP spec should encode"),
+    )
+    .unwrap_or_else(|err| panic!("failed to write {spec_path:?}: {err}"));
 
     let status = Command::new(&go_bin)
         .arg("test")
@@ -1109,6 +1454,7 @@ fn generate_masp_local_dev_proof_requests() -> MaspLocalDevProofRequests {
         .arg("TestExportLocalDevProofRequestFixtures")
         .arg("-count=1")
         .env("MASP_FIXTURE_OUT", &output_path)
+        .env("MASP_ZONE_FIXTURE_SPEC", &spec_path)
         .current_dir(&prover_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -1120,6 +1466,7 @@ fn generate_masp_local_dev_proof_requests() -> MaspLocalDevProofRequests {
         .unwrap_or_else(|err| panic!("failed to read {output_path:?}: {err}"));
     let parsed = serde_json::from_str(&fixtures).expect("generated MASP fixtures should decode");
     let _ = std::fs::remove_file(output_path);
+    let _ = std::fs::remove_file(spec_path);
     parsed
 }
 
@@ -1128,14 +1475,14 @@ fn generate_masp_local_dev_proof_requests() -> MaspLocalDevProofRequests {
 #[ignore = "spawns Go prover-server and generates real Groth16 proofs"]
 async fn test_zone_rpc_fetch_proofs_against_real_masp_prover() {
     let prover = spawn_real_masp_prover().await;
-    let fixtures = generate_masp_local_dev_proof_requests();
-    let (zone_rpc, proof_inputs, _) =
+    let (zone_rpc, proof_inputs, decrypted, secrets) =
         zone_rpc_fixture_with_proof_inputs("zone_rpc_real_masp_prover", prover.url.clone()).await;
+    let fixtures = generate_masp_local_dev_proof_requests(&proof_inputs, &decrypted, &secrets);
 
     let proof_job = zone_rpc
         .fetch_proofs(FetchProofsRequest {
             intent: test_intent(),
-            proof_requests: masp_proof_requests_from_generated_templates(&proof_inputs, fixtures),
+            proof_requests: masp_proof_requests_from_local_dev_fixtures(fixtures),
             prover_mode: Some(ProverProofMode::Sync),
         })
         .await
