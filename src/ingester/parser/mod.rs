@@ -25,6 +25,9 @@ use solana_pubkey::pubkey;
 
 pub const NOOP_PROGRAM_ID: Pubkey = pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
 pub const SHIELDED_POOL_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x53; 32]);
+#[cfg(any(test, feature = "shielded-fixtures"))]
+pub const SHIELDED_POOL_TEST_PROGRAM_ID: Pubkey =
+    pubkey!("FNt7byTHev1k5x2cXZLBr8TdWiC3zoP5vcnZR4P682Uy");
 const SYSTEM_PROGRAM: Pubkey = pubkey!("11111111111111111111111111111111");
 const VOTE_PROGRAM_ID: Pubkey = pubkey!("Vote111111111111111111111111111111111111111");
 
@@ -48,6 +51,16 @@ pub fn set_compression_program_id(program_id_str: &str) -> Result<(), String> {
 pub fn get_shielded_pool_program_id() -> Pubkey {
     *SHIELDED_POOL_PROGRAM_ID_OVERRIDE.get_or_init(|| SHIELDED_POOL_PROGRAM_ID)
 }
+
+pub fn get_shielded_pool_program_ids() -> Vec<Pubkey> {
+    let mut program_ids = vec![get_shielded_pool_program_id()];
+    #[cfg(any(test, feature = "shielded-fixtures"))]
+    if !program_ids.contains(&SHIELDED_POOL_TEST_PROGRAM_ID) {
+        program_ids.push(SHIELDED_POOL_TEST_PROGRAM_ID);
+    }
+    program_ids
+}
+
 pub fn set_shielded_pool_program_id(program_id_str: &str) -> Result<(), String> {
     match program_id_str.parse::<Pubkey>() {
         Ok(pubkey) => match SHIELDED_POOL_PROGRAM_ID_OVERRIDE.set(pubkey) {
@@ -194,12 +207,12 @@ where
         // Shielded-pool Noop payloads are only trusted when emitted by the
         // configured shielded-pool program, and each output must bind to a
         // Light public output context from the same Solana transaction.
-        let shielded_pool_program_id = get_shielded_pool_program_id();
+        let shielded_pool_program_ids = get_shielded_pool_program_ids();
         let shielded_update = self::shielded_pool_event_parser::parse_shielded_pool_events(
             &instruction_group,
             tx.signature,
             slot,
-            &[shielded_pool_program_id],
+            &shielded_pool_program_ids,
             &group_compressed_output_contexts,
         );
         if !shielded_update.shielded_tx_events.is_empty()

@@ -14,15 +14,24 @@
 
 use ark_bn254::Fr;
 use borsh::BorshSerialize;
-use light_compressed_account::Pubkey as LightPubkey;
+use light_compressed_account::{
+    constants::{LIGHT_SYSTEM_PROGRAM_ID, REGISTERED_PROGRAM_PDA},
+    discriminators::{DISCRIMINATOR_INSERT_INTO_QUEUES, DISCRIMINATOR_INVOKE_CPI},
+    instruction_data::{
+        data::OutputCompressedAccountWithPackedContext as LightOutputCompressedAccountWithPackedContext,
+        insert_into_queues::{
+            AppendLeavesInput, InsertIntoQueuesInstructionDataMut,
+            MerkleTreeSequenceNumber as LightMerkleTreeSequenceNumber,
+        },
+        invoke_cpi::InstructionDataInvokeCpi,
+    },
+    Pubkey as LightPubkey, TreeType,
+};
 use light_poseidon::{Poseidon, PoseidonBytesHasher};
-use solana_pubkey::pubkey;
+use solana_pubkey::{pubkey, Pubkey};
 use solana_signature::Signature;
 
-use crate::ingester::parser::indexer_events::{
-    CompressedAccount, CompressedAccountData, MerkleTreeSequenceNumberV1,
-    OutputCompressedAccountWithPackedContext, PublicTransactionEvent,
-};
+use crate::ingester::parser::indexer_events::{BatchEvent, MerkleTreeEvent};
 use crate::ingester::parser::shielded_pool_events::{
     EncryptedTxEphemeralKey, EncryptedTxEphemeralKeyRole, FixturePlaintextPayload,
     FixturePlaintextSidecar, ShieldedPoolTxEvent, ShieldedPoolTxKind, ShieldedPublicDelta,
@@ -31,13 +40,14 @@ use crate::ingester::parser::shielded_pool_events::{
 };
 use crate::ingester::parser::state_update::CompressedOutputContextRecord;
 use crate::ingester::parser::{
-    get_compression_program_id, NOOP_PROGRAM_ID, SHIELDED_POOL_PROGRAM_ID,
+    get_compression_program_id, NOOP_PROGRAM_ID, SHIELDED_POOL_TEST_PROGRAM_ID,
 };
 use crate::ingester::typedefs::block_info::{Instruction, InstructionGroup, TransactionInfo};
 
 const FIXTURE_UTXO_TREE: [u8; 32] = [0xAB; 32];
-const FIXTURE_TREE_SEQUENCE: u64 = 7;
-const FIXTURE_LEAF_INDEX_BASE: u32 = 100;
+const FIXTURE_TREE_SEQUENCE: u64 = 1;
+const FIXTURE_LEAF_INDEX_BASE: u32 = 0;
+const FIXTURE_ROOT_HISTORY_CAPACITY: u64 = 64;
 const FIXTURE_COMPRESSED_ACCOUNT_DISCRIMINATOR: [u8; 8] = *b"shldutxo";
 
 /// Owner identifiers and amounts for one fixture output. Plaintext-only;
@@ -188,8 +198,6 @@ impl FixtureBuilder {
             outputs: output_events,
         };
 
-        let public_event = fixture_public_transaction_event(&event);
-        let public_event_bytes = borsh::to_vec(&public_event).expect("serialize public event");
         let event_bytes = event.to_event_bytes().expect("serialize event");
         let operation_commitment = event.operation_commitment;
 
@@ -198,40 +206,58 @@ impl FixtureBuilder {
             payloads: plaintext_payloads,
         };
 
-        // Build a TransactionInfo with both the Light public output event
-        // and the shielded event. Photon accepts the shielded output only
-        // after it can bind `compressed_output_index` to the Light output
-        // whose compressed account data_hash equals `utxo_hash`.
+        // Build a TransactionInfo that mirrors the local test program:
+        // outer test-program instruction, inner Light system invoke CPI,
+        // account-compression insert-into-queues, then the shielded Noop
+        // payload. Photon must recover the Light public output through the
+        // v2 event parser before accepting the shielded output join.
+        let output_accounts = light_fixture_output_accounts(&event);
         let outer = Instruction {
-            program_id: SHIELDED_POOL_PROGRAM_ID,
+            program_id: SHIELDED_POOL_TEST_PROGRAM_ID,
             data: vec![],
+            accounts: vec![],
+        };
+        let light_system = Instruction {
+            program_id: Pubkey::new_from_array(LIGHT_SYSTEM_PROGRAM_ID),
+            data: light_invoke_cpi_instruction_data(output_accounts.clone()),
+            accounts: light_system_accounts(),
+        };
+        let system = Instruction {
+            program_id: pubkey!("11111111111111111111111111111111"),
+            data: vec![0; 12],
             accounts: vec![],
         };
         let compression = Instruction {
             program_id: get_compression_program_id(),
-            data: vec![],
-            accounts: vec![],
-        };
-        let system = Instruction {
-            program_id: pubkey!("11111111111111111111111111111111"),
-            data: vec![],
-            accounts: vec![],
-        };
-        let public_inner = Instruction {
-            program_id: NOOP_PROGRAM_ID,
-            data: public_event_bytes,
-            accounts: vec![],
+            data: insert_into_queues_instruction_data(&event),
+            accounts: account_compression_accounts(),
         };
         let shielded_inner = Instruction {
             program_id: NOOP_PROGRAM_ID,
             data: event_bytes,
             accounts: vec![],
         };
+        let batch_append_outer = Instruction {
+            program_id: get_compression_program_id(),
+            data: vec![],
+            accounts: vec![Pubkey::new_from_array(FIXTURE_UTXO_TREE)],
+        };
+        let batch_append_noop = Instruction {
+            program_id: NOOP_PROGRAM_ID,
+            data: batch_append_event_data(self.outputs.len()),
+            accounts: vec![],
+        };
         let transaction_info = TransactionInfo {
-            instruction_groups: vec![InstructionGroup {
-                outer_instruction: outer,
-                inner_instructions: vec![compression, system, public_inner, shielded_inner],
-            }],
+            instruction_groups: vec![
+                InstructionGroup {
+                    outer_instruction: outer,
+                    inner_instructions: vec![light_system, system, compression, shielded_inner],
+                },
+                InstructionGroup {
+                    outer_instruction: batch_append_outer,
+                    inner_instructions: vec![batch_append_noop],
+                },
+            ],
             signature: self.signature,
             error: None,
         };
@@ -245,49 +271,148 @@ impl FixtureBuilder {
     }
 }
 
-fn fixture_public_transaction_event(event: &ShieldedPoolTxEvent) -> PublicTransactionEvent {
-    let tree = LightPubkey::from(FIXTURE_UTXO_TREE);
-    let owner = LightPubkey::from(SHIELDED_POOL_PROGRAM_ID.to_bytes());
+pub fn fixture_utxo_tree() -> [u8; 32] {
+    FIXTURE_UTXO_TREE
+}
 
-    PublicTransactionEvent {
-        input_compressed_account_hashes: vec![],
-        output_compressed_account_hashes: event
-            .outputs
-            .iter()
-            .enumerate()
-            .map(|(idx, output)| fixture_compressed_account_hash(idx, &output.utxo_hash))
-            .collect(),
-        output_compressed_accounts: event
-            .outputs
-            .iter()
-            .map(|output| OutputCompressedAccountWithPackedContext {
-                compressed_account: CompressedAccount {
-                    owner,
-                    lamports: 0,
-                    address: None,
-                    data: Some(CompressedAccountData {
+pub fn fixture_tree_sequence() -> u64 {
+    FIXTURE_TREE_SEQUENCE
+}
+
+pub fn fixture_leaf_index_base() -> u32 {
+    FIXTURE_LEAF_INDEX_BASE
+}
+
+fn light_fixture_output_accounts(
+    event: &ShieldedPoolTxEvent,
+) -> Vec<LightOutputCompressedAccountWithPackedContext> {
+    event
+        .outputs
+        .iter()
+        .map(|output| LightOutputCompressedAccountWithPackedContext {
+            compressed_account: light_compressed_account::compressed_account::CompressedAccount {
+                owner: LightPubkey::from(SHIELDED_POOL_TEST_PROGRAM_ID.to_bytes()),
+                lamports: 0,
+                address: None,
+                data: Some(
+                    light_compressed_account::compressed_account::CompressedAccountData {
                         discriminator: FIXTURE_COMPRESSED_ACCOUNT_DISCRIMINATOR,
                         data: Vec::new(),
                         data_hash: output.utxo_hash,
-                    }),
-                },
-                merkle_tree_index: 0,
-            })
-            .collect(),
-        output_leaf_indices: (0..event.outputs.len())
-            .map(|idx| FIXTURE_LEAF_INDEX_BASE + idx as u32)
-            .collect(),
-        sequence_numbers: vec![MerkleTreeSequenceNumberV1 {
-            tree_pubkey: tree,
-            seq: FIXTURE_TREE_SEQUENCE,
-        }],
+                    },
+                ),
+            },
+            merkle_tree_index: 0,
+        })
+        .collect()
+}
+
+fn light_invoke_cpi_instruction_data(
+    output_accounts: Vec<LightOutputCompressedAccountWithPackedContext>,
+) -> Vec<u8> {
+    let invoke = InstructionDataInvokeCpi {
+        proof: None,
+        new_address_params: Vec::new(),
+        input_compressed_accounts_with_merkle_context: Vec::new(),
+        output_compressed_accounts: output_accounts,
         relay_fee: None,
-        is_compress: true,
         compress_or_decompress_lamports: None,
-        pubkey_array: vec![tree],
-        message: None,
-        ata_owners: Vec::new(),
+        is_compress: false,
+        cpi_context: None,
+    };
+    let payload = borsh::to_vec(&invoke).expect("serialize InstructionDataInvokeCpi");
+    instruction_data_with_discriminator(&DISCRIMINATOR_INVOKE_CPI, payload)
+}
+
+fn insert_into_queues_instruction_data(event: &ShieldedPoolTxEvent) -> Vec<u8> {
+    let output_count = u8::try_from(event.outputs.len()).expect("fixture output count fits in u8");
+    let raw_len =
+        InsertIntoQueuesInstructionDataMut::required_size_for_capacity(output_count, 0, 0, 1, 0, 0);
+    let mut raw = vec![0u8; raw_len];
+    {
+        let (mut data, _) =
+            InsertIntoQueuesInstructionDataMut::new_at(&mut raw, output_count, 0, 0, 1, 0, 0)
+                .expect("initialize insert-into-queues fixture data");
+        data.set_invoked_by_program(true);
+        data.bump = 255;
+        data.num_queues = 1;
+        data.num_output_queues = 1;
+        data.start_output_appends = 0;
+        data.num_address_queues = 0;
+        data.tx_hash = [0x88; 32];
+        data.output_sequence_numbers[0] = LightMerkleTreeSequenceNumber {
+            tree_pubkey: LightPubkey::from(FIXTURE_UTXO_TREE),
+            queue_pubkey: LightPubkey::from(FIXTURE_UTXO_TREE),
+            tree_type: (TreeType::StateV2 as u64).into(),
+            seq: FIXTURE_TREE_SEQUENCE.into(),
+        };
+        for (idx, output) in event.outputs.iter().enumerate() {
+            data.leaves[idx] = AppendLeavesInput {
+                account_index: idx as u8,
+                leaf: fixture_compressed_account_hash(idx, &output.utxo_hash),
+            };
+            data.output_leaf_indices[idx] = (FIXTURE_LEAF_INDEX_BASE + idx as u32).into();
+        }
     }
+
+    let mut payload = raw;
+    payload.extend_from_slice(
+        &borsh::to_vec(&Vec::<LightOutputCompressedAccountWithPackedContext>::new())
+            .expect("serialize empty cpi context outputs"),
+    );
+    instruction_data_with_discriminator(&DISCRIMINATOR_INSERT_INTO_QUEUES, payload)
+}
+
+fn batch_append_event_data(output_count: usize) -> Vec<u8> {
+    let old_next_index = FIXTURE_LEAF_INDEX_BASE as u64;
+    let new_next_index = old_next_index + output_count as u64;
+    borsh::to_vec(&MerkleTreeEvent::BatchAppend(BatchEvent {
+        merkle_tree_pubkey: FIXTURE_UTXO_TREE,
+        batch_index: 0,
+        zkp_batch_index: 0,
+        zkp_batch_size: output_count as u64,
+        old_next_index,
+        new_next_index,
+        // Photon recomputes the persisted tree nodes from queued accounts;
+        // the event root is retained here only to match the on-chain event shape.
+        new_root: [0x91; 32],
+        root_index: (FIXTURE_TREE_SEQUENCE % FIXTURE_ROOT_HISTORY_CAPACITY) as u32,
+        sequence_number: FIXTURE_TREE_SEQUENCE,
+        output_queue_pubkey: Some(FIXTURE_UTXO_TREE),
+    }))
+    .expect("serialize fixture batch append event")
+}
+
+fn instruction_data_with_discriminator(discriminator: &[u8; 8], payload: Vec<u8>) -> Vec<u8> {
+    let mut data = Vec::with_capacity(12 + payload.len());
+    data.extend_from_slice(discriminator);
+    data.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    data.extend_from_slice(&payload);
+    data
+}
+
+fn light_system_accounts() -> Vec<Pubkey> {
+    let mut accounts = fixed_accounts(11);
+    accounts.push(Pubkey::new_from_array(FIXTURE_UTXO_TREE));
+    accounts
+}
+
+fn account_compression_accounts() -> Vec<Pubkey> {
+    vec![
+        Pubkey::new_from_array([0xA0; 32]),
+        Pubkey::new_from_array(REGISTERED_PROGRAM_PDA),
+        Pubkey::new_from_array(FIXTURE_UTXO_TREE),
+    ]
+}
+
+fn fixed_accounts(count: usize) -> Vec<Pubkey> {
+    (0..count)
+        .map(|index| {
+            let mut bytes = [0u8; 32];
+            bytes[31] = index as u8;
+            Pubkey::new_from_array(bytes)
+        })
+        .collect()
 }
 
 pub fn fixture_compressed_output_contexts(
@@ -407,7 +532,7 @@ mod tests {
             &f.transaction_info.instruction_groups[0],
             Signature::default(),
             100,
-            &[SHIELDED_POOL_PROGRAM_ID],
+            &[SHIELDED_POOL_TEST_PROGRAM_ID],
             &contexts,
         );
         assert_eq!(state_update.shielded_tx_events.len(), 1);
@@ -419,6 +544,51 @@ mod tests {
         );
         assert_eq!(
             state_update.shielded_outputs[0].utxo_hash,
+            f.event.outputs[0].utxo_hash
+        );
+    }
+
+    #[test]
+    fn fixture_transaction_uses_light_v2_event_shape() {
+        let f = fixture();
+        let group = &f.transaction_info.instruction_groups[0];
+        let mut ordered_instructions = vec![group.outer_instruction.clone()];
+        ordered_instructions.extend(group.inner_instructions.clone());
+        let program_ids = ordered_instructions
+            .iter()
+            .map(|instruction| instruction.program_id)
+            .collect::<Vec<_>>();
+        let instruction_data = ordered_instructions
+            .iter()
+            .map(|instruction| instruction.data.clone())
+            .collect::<Vec<_>>();
+        let accounts = ordered_instructions
+            .iter()
+            .map(|instruction| instruction.accounts.clone())
+            .collect::<Vec<_>>();
+
+        let public_events =
+            crate::ingester::parser::tx_event_parser_v2::parse_public_transaction_event_v2(
+                &program_ids,
+                &instruction_data,
+                accounts,
+            )
+            .expect("fixture should parse through Light v2 event parser");
+        assert_eq!(public_events.len(), 1);
+        let public_event = &public_events[0].event;
+        assert_eq!(public_event.output_compressed_accounts.len(), 1);
+        assert_eq!(
+            public_event.output_leaf_indices,
+            vec![FIXTURE_LEAF_INDEX_BASE]
+        );
+        assert_eq!(public_event.sequence_numbers[0].seq, FIXTURE_TREE_SEQUENCE);
+        assert_eq!(
+            public_event.output_compressed_accounts[0]
+                .compressed_account
+                .data
+                .as_ref()
+                .unwrap()
+                .data_hash,
             f.event.outputs[0].utxo_hash
         );
     }

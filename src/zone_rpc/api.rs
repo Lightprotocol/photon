@@ -3,23 +3,33 @@
 //! This module exposes the API names from `zones/design.md`. Granular Photon
 //! helpers and private-store selectors remain backing implementation details.
 
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::{DatabaseConnection, EntityTrait, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::api::error::PhotonApiError;
+use crate::api::method::get_compressed_account_proof::{
+    get_compressed_account_proof_v2, GetCompressedAccountProofResponseValueV2,
+};
+use crate::api::method::get_multiple_new_address_proofs::{
+    get_multiple_new_address_proofs_helper, AddressWithTree, MerkleContextWithNewAddressProof,
+    MAX_ADDRESSES,
+};
 use crate::api::method::get_shielded_utxos::{
     get_shielded_utxo, get_shielded_utxos_by_signature, get_shielded_utxos_by_tree,
     get_shielded_utxos_by_zone, GetShieldedUtxoRequest, GetShieldedUtxosBySignatureRequest,
     GetShieldedUtxosByTreeRequest, GetShieldedUtxosByZoneRequest, ShieldedUtxoListResponse,
 };
+use crate::api::method::utils::HashRequest;
+use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::common::typedefs::serializable_signature::SerializableSignature;
-use crate::dao::generated::zone_configs;
+use crate::dao::generated::{tree_metadata, zone_configs};
 use crate::zone_rpc::jobs::{LocalZoneJobStore, ZoneJobKind};
 use crate::zone_rpc::private_api::{
     GetZoneUtxosByOwnerHashRequest, GetZoneUtxosByOwnerPubkeyRequest,
@@ -110,7 +120,11 @@ pub struct FetchDecryptedUtxosRequest {
 pub struct FetchProofInputsRequest {
     pub zone_config_hash: String,
     pub input_utxo_hashes: Vec<String>,
-    pub recent_root_preference: Option<String>,
+    #[serde(default)]
+    pub spend_nullifiers: Vec<String>,
+    pub nullifier_tree: Option<SerializablePubkey>,
+    pub utxo_root_sequence: Option<u64>,
+    pub nullifier_root_sequence: Option<u64>,
     pub authorization: ZoneQueryAuthorization,
 }
 
@@ -118,33 +132,97 @@ pub struct FetchProofInputsRequest {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FetchProofInputsResponse {
     pub zone_config_hash: String,
-    pub recent_root_preference: Option<String>,
+    pub utxo_root_sequence: Option<u64>,
+    pub nullifier_root_sequence: Option<u64>,
     pub inputs: Vec<ProofInputUtxoView>,
     pub root_context: Option<ProofRootContextView>,
+    pub root_context_status: ProofRootContextStatusView,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProofInputUtxoView {
     pub utxo_hash: String,
+    pub spend_nullifier: Option<String>,
+    pub compressed_account_hash: String,
+    pub compressed_output_index: u32,
     pub utxo_tree: String,
     pub leaf_index: u64,
     pub tree_sequence: u64,
+    pub tx_signature: SerializableSignature,
+    pub slot: u64,
+    pub event_index: u32,
+    pub output_index: u8,
     pub operation_commitment: String,
+    pub encrypted_utxo: String,
     pub encrypted_utxo_hash: String,
     pub nullifier_chain: Option<String>,
     pub input_nullifiers: Vec<String>,
+    pub compressed_account_proof: Option<CompressedAccountProofView>,
+    pub nullifier_non_inclusion_proof: Option<NullifierNonInclusionProofView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompressedAccountProofView {
+    pub root: String,
+    pub root_index: Option<u64>,
+    pub proof: Vec<String>,
+    pub path_directions: Vec<u8>,
+    pub leaf_index: u32,
+    pub hash: String,
+    pub root_sequence: u64,
+    pub prove_by_index: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NullifierNonInclusionProofView {
+    pub nullifier: String,
+    pub nullifier_tree: SerializablePubkey,
+    pub root: String,
+    pub root_index: u64,
+    pub root_sequence: u64,
+    pub low_value: String,
+    pub next_value: String,
+    pub next_index: u32,
+    pub low_leaf_index: u32,
+    pub proof: Vec<String>,
+    pub path_directions: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProofRootContextView {
+    pub utxo_tree_id: String,
     pub utxo_root: String,
+    pub utxo_root_index: u64,
+    pub utxo_root_sequence: u64,
+    pub nullifier_tree_id: String,
     pub nullifier_root: String,
-    pub root_slot: u64,
-    pub utxo_tree_sequence: u64,
-    pub nullifier_tree_sequence: u64,
+    pub nullifier_root_index: u64,
+    pub nullifier_root_sequence: u64,
     pub expires_after_slot: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProofRootContextStatusView {
+    pub is_available: bool,
+    pub utxo_inclusion_proofs_available: bool,
+    pub nullifier_context_available: bool,
+    pub required_utxo_trees: Vec<ProofTreeRequirementView>,
+    pub unavailable_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProofTreeRequirementView {
+    pub utxo_tree: String,
+    pub input_count: u64,
+    pub min_leaf_index: u64,
+    pub max_leaf_index: u64,
+    pub max_tree_sequence: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -373,15 +451,20 @@ impl ZoneRpcApi {
                 "fetch_proof_inputs requires at least one input_utxo_hash".to_string(),
             ));
         }
-        if let Some(root) = &request.recent_root_preference {
-            decode_hex_32(root, "recentRootPreference")?;
-        }
         validate_authorization_shape(&request.authorization)?;
+        let spend_nullifiers = decode_spend_nullifiers(&request)?;
 
         let zone_config_hash_hex = hex_encode(&zone_config_hash);
         let mut inputs = Vec::with_capacity(request.input_utxo_hashes.len());
+        let mut seen_input_hashes = HashSet::with_capacity(request.input_utxo_hashes.len());
+        let mut unavailable_reasons = Vec::new();
         for (index, utxo_hash) in request.input_utxo_hashes.iter().enumerate() {
             let utxo_hash_bytes = decode_hex_32(utxo_hash, &format!("inputUtxoHashes[{index}]"))?;
+            if !seen_input_hashes.insert(utxo_hash_bytes) {
+                return Err(ZoneRpcApiError::Validation(format!(
+                    "inputUtxoHashes[{index}] duplicates an earlier input"
+                )));
+            }
             let response = get_shielded_utxo(
                 self.photon_conn.as_ref(),
                 GetShieldedUtxoRequest {
@@ -402,23 +485,116 @@ impl ZoneRpcApi {
                 )));
             }
 
+            let compressed_account_hash_bytes =
+                decode_hex_32(&record.compressed_account_hash, "compressedAccountHash")?;
+            let compressed_account_proof = match get_compressed_account_proof_v2(
+                self.photon_conn.as_ref(),
+                HashRequest {
+                    hash: Hash(compressed_account_hash_bytes),
+                },
+            )
+            .await
+            {
+                Ok(response) => Some(compressed_account_proof_view(response.value)),
+                Err(PhotonApiError::RecordNotFound(err)) => {
+                    unavailable_reasons.push(format!(
+                        "compressed account proof unavailable for input {}: Record Not Found: {}",
+                        record.utxo_hash, err
+                    ));
+                    None
+                }
+                Err(err) => return Err(ZoneRpcApiError::from(err)),
+            };
+
             inputs.push(ProofInputUtxoView {
                 utxo_hash: record.utxo_hash,
+                spend_nullifier: spend_nullifiers
+                    .as_ref()
+                    .map(|nullifiers| hex_encode(&nullifiers[index])),
+                compressed_account_hash: record.compressed_account_hash,
+                compressed_output_index: record.compressed_output_index,
                 utxo_tree: record.utxo_tree,
                 leaf_index: record.leaf_index,
                 tree_sequence: record.sequence_number,
+                tx_signature: record.signature,
+                slot: record.slot,
+                event_index: record.event_index,
+                output_index: record.output_index,
                 operation_commitment: record.event.operation_commitment,
+                encrypted_utxo: record.encrypted_utxo,
                 encrypted_utxo_hash: record.encrypted_utxo_hash,
                 nullifier_chain: record.event.nullifier_chain,
                 input_nullifiers: record.event.input_nullifiers,
+                compressed_account_proof,
+                nullifier_non_inclusion_proof: None,
             });
         }
 
+        attach_utxo_root_indices(
+            self.photon_conn.as_ref(),
+            &mut inputs,
+            &mut unavailable_reasons,
+        )
+        .await?;
+
+        if let (Some(nullifier_tree), Some(spend_nullifiers)) =
+            (request.nullifier_tree, spend_nullifiers.as_ref())
+        {
+            let nullifier_proofs = fetch_nullifier_non_inclusion_proofs(
+                self.photon_conn.as_ref(),
+                nullifier_tree,
+                spend_nullifiers,
+            )
+            .await?;
+            for (input, proof) in inputs.iter_mut().zip(nullifier_proofs) {
+                input.nullifier_non_inclusion_proof = Some(proof);
+            }
+        } else {
+            unavailable_reasons.push(
+                "spendNullifiers and nullifierTree are required for nullifier non-inclusion context"
+                    .to_string(),
+            );
+        }
+
+        let utxo_inclusion_proofs_available = inputs.iter().all(|input| {
+            input
+                .compressed_account_proof
+                .as_ref()
+                .is_some_and(|proof| proof.root_index.is_some())
+        });
+        let nullifier_context_available = inputs
+            .iter()
+            .all(|input| input.nullifier_non_inclusion_proof.is_some());
+        let requested_sequences_satisfied = validate_requested_root_sequences(
+            &inputs,
+            request.utxo_root_sequence,
+            request.nullifier_root_sequence,
+            &mut unavailable_reasons,
+        );
+        let mut root_context = build_root_context(&inputs, &mut unavailable_reasons);
+        if !requested_sequences_satisfied {
+            root_context = None;
+        }
+
+        let root_context_status = ProofRootContextStatusView {
+            is_available: root_context.is_some(),
+            utxo_inclusion_proofs_available,
+            nullifier_context_available,
+            required_utxo_trees: summarize_proof_tree_requirements(&inputs),
+            unavailable_reasons,
+        };
+
         Ok(FetchProofInputsResponse {
             zone_config_hash: zone_config_hash_hex,
-            recent_root_preference: request.recent_root_preference,
+            utxo_root_sequence: root_context
+                .as_ref()
+                .map(|context| context.utxo_root_sequence),
+            nullifier_root_sequence: root_context
+                .as_ref()
+                .map(|context| context.nullifier_root_sequence),
             inputs,
-            root_context: None,
+            root_context,
+            root_context_status,
         })
     }
 
@@ -606,6 +782,320 @@ fn aggregate_proof_job_status(proof_jobs: &[ZoneProofJobView]) -> ZoneJobStatus 
     ZoneJobStatus::Queued
 }
 
+fn compressed_account_proof_view(
+    proof: GetCompressedAccountProofResponseValueV2,
+) -> CompressedAccountProofView {
+    CompressedAccountProofView {
+        root: hex_encode(&proof.root.0),
+        root_index: None,
+        proof: proof.proof.iter().map(|node| hex_encode(&node.0)).collect(),
+        path_directions: merkle_path_directions(proof.leaf_index as u64, proof.proof.len()),
+        leaf_index: proof.leaf_index,
+        hash: hex_encode(&proof.hash.0),
+        root_sequence: proof.root_seq,
+        prove_by_index: proof.prove_by_index,
+    }
+}
+
+async fn attach_utxo_root_indices(
+    conn: &DatabaseConnection,
+    inputs: &mut [ProofInputUtxoView],
+    unavailable_reasons: &mut Vec<String>,
+) -> Result<(), ZoneRpcApiError> {
+    for input in inputs {
+        let Some(proof) = &mut input.compressed_account_proof else {
+            continue;
+        };
+        let tree = decode_hex_32(&input.utxo_tree, "utxoTree")?;
+        match root_index_for_tree(conn, &tree, proof.root_sequence).await? {
+            Some(root_index) => proof.root_index = Some(root_index),
+            None => unavailable_reasons.push(format!(
+                "root history metadata unavailable for UTXO tree {}",
+                input.utxo_tree
+            )),
+        }
+    }
+    Ok(())
+}
+
+async fn fetch_nullifier_non_inclusion_proofs(
+    conn: &DatabaseConnection,
+    nullifier_tree: SerializablePubkey,
+    nullifiers: &[[u8; 32]],
+) -> Result<Vec<NullifierNonInclusionProofView>, ZoneRpcApiError> {
+    let root_history_capacity =
+        root_history_capacity_for_tree(conn, &nullifier_tree.to_bytes_vec())
+            .await?
+            .ok_or_else(|| {
+                ZoneRpcApiError::Validation(format!(
+                    "tree metadata not found for nullifierTree {}",
+                    nullifier_tree
+                ))
+            })?;
+
+    let tx = conn
+        .begin()
+        .await
+        .map_err(|err| ZoneRpcApiError::Photon(err.to_string()))?;
+    crate::api::set_transaction_isolation_if_needed(&tx)
+        .await
+        .map_err(|err| ZoneRpcApiError::Photon(err.to_string()))?;
+
+    let addresses = nullifiers
+        .iter()
+        .map(|nullifier| AddressWithTree {
+            address: SerializablePubkey::from(*nullifier),
+            tree: nullifier_tree,
+        })
+        .collect::<Vec<_>>();
+    let proofs =
+        get_multiple_new_address_proofs_helper(&tx, addresses, MAX_ADDRESSES, true).await?;
+    tx.commit()
+        .await
+        .map_err(|err| ZoneRpcApiError::Photon(err.to_string()))?;
+
+    Ok(proofs
+        .into_iter()
+        .zip(nullifiers.iter().copied())
+        .map(|(proof, nullifier)| {
+            nullifier_non_inclusion_proof_view(
+                proof,
+                nullifier_tree,
+                nullifier,
+                root_history_capacity,
+            )
+        })
+        .collect())
+}
+
+fn nullifier_non_inclusion_proof_view(
+    proof: MerkleContextWithNewAddressProof,
+    nullifier_tree: SerializablePubkey,
+    nullifier: [u8; 32],
+    root_history_capacity: u64,
+) -> NullifierNonInclusionProofView {
+    NullifierNonInclusionProofView {
+        nullifier: hex_encode(&nullifier),
+        nullifier_tree,
+        root: hex_encode(&proof.root.0),
+        root_index: proof.rootSeq % root_history_capacity,
+        root_sequence: proof.rootSeq,
+        low_value: hex_encode(&proof.lowerRangeAddress.to_bytes_vec()),
+        next_value: hex_encode(&proof.higherRangeAddress.to_bytes_vec()),
+        next_index: proof.nextIndex,
+        low_leaf_index: proof.lowElementLeafIndex,
+        proof: proof.proof.iter().map(|node| hex_encode(&node.0)).collect(),
+        path_directions: merkle_path_directions(
+            proof.lowElementLeafIndex as u64,
+            proof.proof.len(),
+        ),
+    }
+}
+
+async fn root_index_for_tree(
+    conn: &DatabaseConnection,
+    tree: &[u8; 32],
+    root_sequence: u64,
+) -> Result<Option<u64>, ZoneRpcApiError> {
+    let Some(root_history_capacity) = root_history_capacity_for_tree(conn, tree).await? else {
+        return Ok(None);
+    };
+    Ok(Some(root_sequence % root_history_capacity))
+}
+
+async fn root_history_capacity_for_tree(
+    conn: &DatabaseConnection,
+    tree: &[u8],
+) -> Result<Option<u64>, ZoneRpcApiError> {
+    let model = tree_metadata::Entity::find_by_id(tree.to_vec())
+        .one(conn)
+        .await
+        .map_err(|err| ZoneRpcApiError::Photon(err.to_string()))?;
+    let Some(model) = model else {
+        return Ok(None);
+    };
+    if model.root_history_capacity <= 0 {
+        return Ok(None);
+    }
+    Ok(Some(model.root_history_capacity as u64))
+}
+
+fn build_root_context(
+    inputs: &[ProofInputUtxoView],
+    unavailable_reasons: &mut Vec<String>,
+) -> Option<ProofRootContextView> {
+    let mut utxo_context: Option<(String, String, u64, u64)> = None;
+    let mut nullifier_context: Option<(String, String, u64, u64)> = None;
+
+    for input in inputs {
+        let proof = input.compressed_account_proof.as_ref()?;
+        let root_index = proof.root_index?;
+        let current = (
+            input.utxo_tree.clone(),
+            proof.root.clone(),
+            root_index,
+            proof.root_sequence,
+        );
+        match &utxo_context {
+            Some(existing) if existing != &current => {
+                unavailable_reasons.push(
+                    "rootContext requires all input UTXOs to share the same UTXO root".to_string(),
+                );
+                return None;
+            }
+            None => utxo_context = Some(current),
+            _ => {}
+        }
+
+        let proof = input.nullifier_non_inclusion_proof.as_ref()?;
+        let current = (
+            hex_encode(&proof.nullifier_tree.to_bytes_vec()),
+            proof.root.clone(),
+            proof.root_index,
+            proof.root_sequence,
+        );
+        match &nullifier_context {
+            Some(existing) if existing != &current => {
+                unavailable_reasons.push(
+                    "rootContext requires all spend nullifiers to share the same nullifier root"
+                        .to_string(),
+                );
+                return None;
+            }
+            None => nullifier_context = Some(current),
+            _ => {}
+        }
+    }
+
+    let (utxo_tree_id, utxo_root, utxo_root_index, utxo_root_sequence) = utxo_context?;
+    let (nullifier_tree_id, nullifier_root, nullifier_root_index, nullifier_root_sequence) =
+        nullifier_context?;
+
+    Some(ProofRootContextView {
+        utxo_tree_id,
+        utxo_root,
+        utxo_root_index,
+        utxo_root_sequence,
+        nullifier_tree_id,
+        nullifier_root,
+        nullifier_root_index,
+        nullifier_root_sequence,
+        expires_after_slot: None,
+    })
+}
+
+fn validate_requested_root_sequences(
+    inputs: &[ProofInputUtxoView],
+    requested_utxo_root_sequence: Option<u64>,
+    requested_nullifier_root_sequence: Option<u64>,
+    unavailable_reasons: &mut Vec<String>,
+) -> bool {
+    let mut satisfied = true;
+
+    if let Some(requested) = requested_utxo_root_sequence {
+        let actual = inputs
+            .iter()
+            .filter_map(|input| {
+                input
+                    .compressed_account_proof
+                    .as_ref()
+                    .map(|proof| proof.root_sequence)
+            })
+            .collect::<HashSet<_>>();
+        if actual.is_empty() {
+            unavailable_reasons.push(format!(
+                "requested utxoRootSequence {requested} cannot be checked because UTXO inclusion proofs are unavailable"
+            ));
+            satisfied = false;
+        } else if actual.len() != 1 || !actual.contains(&requested) {
+            unavailable_reasons.push(format!(
+                "requested utxoRootSequence {requested} does not match indexed UTXO proof sequence(s): {:?}",
+                sorted_u64s(actual)
+            ));
+            satisfied = false;
+        }
+    }
+
+    if let Some(requested) = requested_nullifier_root_sequence {
+        let actual = inputs
+            .iter()
+            .filter_map(|input| {
+                input
+                    .nullifier_non_inclusion_proof
+                    .as_ref()
+                    .map(|proof| proof.root_sequence)
+            })
+            .collect::<HashSet<_>>();
+        if actual.is_empty() {
+            unavailable_reasons.push(format!(
+                "requested nullifierRootSequence {requested} cannot be checked because nullifier non-inclusion proofs are unavailable"
+            ));
+            satisfied = false;
+        } else if actual.len() != 1 || !actual.contains(&requested) {
+            unavailable_reasons.push(format!(
+                "requested nullifierRootSequence {requested} does not match indexed nullifier proof sequence(s): {:?}",
+                sorted_u64s(actual)
+            ));
+            satisfied = false;
+        }
+    }
+
+    satisfied
+}
+
+fn sorted_u64s(values: HashSet<u64>) -> Vec<u64> {
+    let mut values = values.into_iter().collect::<Vec<_>>();
+    values.sort_unstable();
+    values
+}
+
+fn merkle_path_directions(leaf_index: u64, proof_len: usize) -> Vec<u8> {
+    (0..proof_len)
+        .map(|bit| ((leaf_index >> bit) & 1) as u8)
+        .collect()
+}
+
+fn summarize_proof_tree_requirements(
+    inputs: &[ProofInputUtxoView],
+) -> Vec<ProofTreeRequirementView> {
+    #[derive(Debug)]
+    struct Acc {
+        input_count: u64,
+        min_leaf_index: u64,
+        max_leaf_index: u64,
+        max_tree_sequence: u64,
+    }
+
+    let mut by_tree = BTreeMap::<String, Acc>::new();
+    for input in inputs {
+        by_tree
+            .entry(input.utxo_tree.clone())
+            .and_modify(|acc| {
+                acc.input_count += 1;
+                acc.min_leaf_index = acc.min_leaf_index.min(input.leaf_index);
+                acc.max_leaf_index = acc.max_leaf_index.max(input.leaf_index);
+                acc.max_tree_sequence = acc.max_tree_sequence.max(input.tree_sequence);
+            })
+            .or_insert(Acc {
+                input_count: 1,
+                min_leaf_index: input.leaf_index,
+                max_leaf_index: input.leaf_index,
+                max_tree_sequence: input.tree_sequence,
+            });
+    }
+
+    by_tree
+        .into_iter()
+        .map(|(utxo_tree, acc)| ProofTreeRequirementView {
+            utxo_tree,
+            input_count: acc.input_count,
+            min_leaf_index: acc.min_leaf_index,
+            max_leaf_index: acc.max_leaf_index,
+            max_tree_sequence: acc.max_tree_sequence,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FetchUtxosFilter {
     UtxoHash,
@@ -659,6 +1149,44 @@ fn selected_decrypted_selector(
         (true, true) => Err(ZoneRpcApiError::Validation(
             "owner_hash and owner_pubkey are mutually exclusive".to_string(),
         )),
+    }
+}
+
+fn decode_spend_nullifiers(
+    request: &FetchProofInputsRequest,
+) -> Result<Option<Vec<[u8; 32]>>, ZoneRpcApiError> {
+    match (
+        request.spend_nullifiers.is_empty(),
+        request.nullifier_tree.is_some(),
+    ) {
+        (true, false) => Ok(None),
+        (true, true) => Err(ZoneRpcApiError::Validation(
+            "spendNullifiers are required when nullifierTree is set".to_string(),
+        )),
+        (false, false) => Err(ZoneRpcApiError::Validation(
+            "nullifierTree is required when spendNullifiers are set".to_string(),
+        )),
+        (false, true) => {
+            if request.spend_nullifiers.len() != request.input_utxo_hashes.len() {
+                return Err(ZoneRpcApiError::Validation(format!(
+                    "spendNullifiers length ({}) must match inputUtxoHashes length ({})",
+                    request.spend_nullifiers.len(),
+                    request.input_utxo_hashes.len()
+                )));
+            }
+            let mut seen = HashSet::with_capacity(request.spend_nullifiers.len());
+            let mut decoded = Vec::with_capacity(request.spend_nullifiers.len());
+            for (index, nullifier) in request.spend_nullifiers.iter().enumerate() {
+                let nullifier = decode_hex_32(nullifier, &format!("spendNullifiers[{index}]"))?;
+                if !seen.insert(nullifier) {
+                    return Err(ZoneRpcApiError::Validation(format!(
+                        "spendNullifiers[{index}] duplicates an earlier nullifier"
+                    )));
+                }
+                decoded.push(nullifier);
+            }
+            Ok(Some(decoded))
+        }
     }
 }
 
@@ -803,6 +1331,43 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, ZoneRpcApiError::Validation(_)));
+    }
+
+    #[test]
+    fn proof_input_request_validates_nullifier_context_shape() {
+        let authorization = ZoneQueryAuthorization {
+            requester: "local-test".to_string(),
+            message: "local-test-query".to_string(),
+            signature: "local-test-signature".to_string(),
+        };
+        let mut request = FetchProofInputsRequest {
+            zone_config_hash: hex_encode(&[1u8; 32]),
+            input_utxo_hashes: vec![hex_encode(&[2u8; 32])],
+            spend_nullifiers: vec![hex_encode(&[3u8; 32])],
+            nullifier_tree: None,
+            utxo_root_sequence: None,
+            nullifier_root_sequence: None,
+            authorization,
+        };
+        assert!(matches!(
+            decode_spend_nullifiers(&request),
+            Err(ZoneRpcApiError::Validation(_))
+        ));
+
+        request.nullifier_tree = Some(SerializablePubkey::from([4u8; 32]));
+        let decoded = decode_spend_nullifiers(&request).unwrap().unwrap();
+        assert_eq!(decoded, vec![[3u8; 32]]);
+
+        request.spend_nullifiers.push(hex_encode(&[5u8; 32]));
+        assert!(matches!(
+            decode_spend_nullifiers(&request),
+            Err(ZoneRpcApiError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn merkle_path_directions_are_lsb_first() {
+        assert_eq!(merkle_path_directions(0b10110, 5), vec![0, 1, 1, 0, 1]);
     }
 
     #[test]
