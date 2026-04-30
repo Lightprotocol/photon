@@ -132,8 +132,9 @@ pub struct ZoneDecryptedUtxoView {
     pub signature: String,
     pub event_index: u32,
     pub output_index: u8,
-    pub leaf_index: Option<u64>,
-    pub tree_sequence: Option<u64>,
+    pub utxo_tree: String,
+    pub leaf_index: u64,
+    pub tree_sequence: u64,
     pub spent: bool,
 }
 
@@ -228,6 +229,7 @@ fn view_from_record(row: &ZoneDecryptedUtxoRecord) -> ZoneDecryptedUtxoView {
         signature: row.signature.to_string(),
         event_index: row.event_index,
         output_index: row.output_index,
+        utxo_tree: hex_encode(&row.utxo_tree),
         leaf_index: row.leaf_index,
         tree_sequence: row.tree_sequence,
         spent: row.spent,
@@ -297,8 +299,9 @@ mod tests {
             signature: Signature::default(),
             event_index: 0,
             output_index: seed,
-            leaf_index: Some(123),
-            tree_sequence: Some(456),
+            utxo_tree: [0xee; 32],
+            leaf_index: 123,
+            tree_sequence: 456,
             spent: false,
         }
     }

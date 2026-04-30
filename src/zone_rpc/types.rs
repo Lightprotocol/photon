@@ -19,7 +19,8 @@ pub struct ZoneDecryptedUtxoRecord {
     pub signature: Signature,
     pub event_index: u32,
     pub output_index: u8,
-    pub leaf_index: Option<u64>,
-    pub tree_sequence: Option<u64>,
+    pub utxo_tree: [u8; 32],
+    pub leaf_index: u64,
+    pub tree_sequence: u64,
     pub spent: bool,
 }

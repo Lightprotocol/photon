@@ -209,6 +209,11 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::CompressedOutputIndex)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
                         ColumnDef::new(ShieldedUtxoOutputs::Slot)
                             .big_integer()
                             .not_null(),
@@ -220,19 +225,24 @@ impl MigrationTrait for Migration {
                             .unique_key(),
                     )
                     .col(
+                        ColumnDef::new(ShieldedUtxoOutputs::CompressedAccountHash)
+                            .binary_len(32)
+                            .not_null(),
+                    )
+                    .col(
                         ColumnDef::new(ShieldedUtxoOutputs::UtxoTree)
                             .binary_len(32)
-                            .null(),
+                            .not_null(),
                     )
                     .col(
                         ColumnDef::new(ShieldedUtxoOutputs::LeafIndex)
                             .big_integer()
-                            .null(),
+                            .not_null(),
                     )
                     .col(
                         ColumnDef::new(ShieldedUtxoOutputs::TreeSequence)
                             .big_integer()
-                            .null(),
+                            .not_null(),
                     )
                     .col(
                         ColumnDef::new(ShieldedUtxoOutputs::EncryptedUtxo)
@@ -244,7 +254,6 @@ impl MigrationTrait for Migration {
                             .binary_len(32)
                             .not_null(),
                     )
-                    .col(ColumnDef::new(ShieldedUtxoOutputs::FmdClue).binary().null())
                     .col(
                         ColumnDef::new(ShieldedUtxoOutputs::ZoneConfigHash)
                             .binary_len(32)
@@ -287,6 +296,17 @@ impl MigrationTrait for Migration {
                     .table(ShieldedUtxoOutputs::Table)
                     .col(ShieldedUtxoOutputs::UtxoTree)
                     .col(ShieldedUtxoOutputs::LeafIndex)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_shielded_utxo_outputs_compressed_hash")
+                    .table(ShieldedUtxoOutputs::Table)
+                    .col(ShieldedUtxoOutputs::CompressedAccountHash)
                     .to_owned(),
             )
             .await?;
@@ -426,14 +446,15 @@ enum ShieldedUtxoOutputs {
     TxSignature,
     EventIndex,
     OutputIndex,
+    CompressedOutputIndex,
     Slot,
     UtxoHash,
+    CompressedAccountHash,
     UtxoTree,
     LeafIndex,
     TreeSequence,
     EncryptedUtxo,
     EncryptedUtxoHash,
-    FmdClue,
     ZoneConfigHash,
 }
 

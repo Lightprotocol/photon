@@ -80,20 +80,19 @@ pub struct ShieldedPublicDelta {
     pub sol_amount: i128,
 }
 
-/// One created UTXO. Fields that depend on the real append path
-/// (`utxo_tree`, `leaf_index`, `tree_sequence`) are nullable so
-/// dummy events can be emitted before the compressed-account program is
-/// wired.
+/// One created UTXO. Tree location is not carried here: Photon derives the
+/// authoritative compressed account hash, tree, leaf index, and sequence from
+/// the Light public transaction event in the same Solana transaction.
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ShieldedUtxoOutputEvent {
+    /// Local output index within this shielded event.
     pub output_index: u8,
+    /// Output index in the Light public transaction event. The compressed
+    /// account at this index must carry `data_hash == utxo_hash`.
+    pub compressed_output_index: u32,
     pub utxo_hash: [u8; 32],
-    pub utxo_tree: Option<[u8; 32]>,
-    pub leaf_index: Option<u64>,
-    pub tree_sequence: Option<u64>,
     pub encrypted_utxo: Vec<u8>,
     pub encrypted_utxo_hash: [u8; 32],
-    pub fmd_clue: Option<Vec<u8>>,
 }
 
 /// Top-level shielded-pool transaction event. One event per shielded
@@ -244,13 +243,10 @@ mod tests {
     fn sample_output(index: u8) -> ShieldedUtxoOutputEvent {
         ShieldedUtxoOutputEvent {
             output_index: index,
+            compressed_output_index: index as u32,
             utxo_hash: [index; 32],
-            utxo_tree: None,
-            leaf_index: None,
-            tree_sequence: None,
             encrypted_utxo: vec![1, 2, 3, index],
             encrypted_utxo_hash: [index ^ 0xff; 32],
-            fmd_clue: None,
         }
     }
 

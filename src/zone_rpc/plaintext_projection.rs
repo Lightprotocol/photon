@@ -212,6 +212,7 @@ impl ZonePlaintextProjector {
             signature: output.tx_signature,
             event_index: output.event_index,
             output_index: output.output_index,
+            utxo_tree: output.utxo_tree,
             leaf_index: output.leaf_index,
             tree_sequence: output.tree_sequence,
             spent: false,
@@ -313,7 +314,8 @@ impl InMemoryZonePrivateStore {
 mod tests {
     use super::*;
     use crate::ingester::parser::shielded_pool_test_fixture::{
-        DummyShieldedPoolFixture, FixtureBuilder, FixtureOwnerSpec,
+        fixture_compressed_output_contexts, DummyShieldedPoolFixture, FixtureBuilder,
+        FixtureOwnerSpec,
     };
     use crate::ingester::parser::{
         shielded_pool_event_parser::parse_shielded_pool_events, SHIELDED_POOL_PROGRAM_ID,
@@ -333,11 +335,13 @@ mod tests {
 
     fn parse_fixture(fixture: &DummyShieldedPoolFixture) -> StateUpdate {
         let group = &fixture.transaction_info.instruction_groups[0];
+        let contexts = fixture_compressed_output_contexts(&fixture.event);
         parse_shielded_pool_events(
             group,
             fixture.transaction_info.signature,
             100,
             &[SHIELDED_POOL_PROGRAM_ID],
+            &contexts,
         )
     }
 

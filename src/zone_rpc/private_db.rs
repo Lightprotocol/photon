@@ -96,14 +96,19 @@ pub async fn migrate_zone_private_db(conn: &DatabaseConnection) -> Result<(), Db
                         .not_null(),
                 )
                 .col(
+                    ColumnDef::new(ZoneDecryptedUtxos::UtxoTree)
+                        .binary_len(32)
+                        .not_null(),
+                )
+                .col(
                     ColumnDef::new(ZoneDecryptedUtxos::LeafIndex)
                         .big_integer()
-                        .null(),
+                        .not_null(),
                 )
                 .col(
                     ColumnDef::new(ZoneDecryptedUtxos::TreeSequence)
                         .big_integer()
-                        .null(),
+                        .not_null(),
                 )
                 .col(
                     ColumnDef::new(ZoneDecryptedUtxos::Spent)
@@ -160,6 +165,17 @@ pub async fn migrate_zone_private_db(conn: &DatabaseConnection) -> Result<(), Db
                 .col(ZoneDecryptedUtxos::EventIndex)
                 .col(ZoneDecryptedUtxos::OutputIndex)
                 .unique()
+                .to_owned(),
+        )
+        .await?;
+    manager
+        .create_index(
+            Index::create()
+                .if_not_exists()
+                .name("idx_zone_decrypted_utxos_tree_leaf")
+                .table(ZoneDecryptedUtxos::Table)
+                .col(ZoneDecryptedUtxos::UtxoTree)
+                .col(ZoneDecryptedUtxos::LeafIndex)
                 .to_owned(),
         )
         .await?;
@@ -339,14 +355,9 @@ fn active_model_from_record(
         signature: Set(Into::<[u8; 64]>::into(row.signature).to_vec()),
         event_index: Set(i32_from_u32("event_index", row.event_index)?),
         output_index: Set(i16::from(row.output_index)),
-        leaf_index: Set(row
-            .leaf_index
-            .map(|value| i64_from_u64("leaf_index", value))
-            .transpose()?),
-        tree_sequence: Set(row
-            .tree_sequence
-            .map(|value| i64_from_u64("tree_sequence", value))
-            .transpose()?),
+        utxo_tree: Set(row.utxo_tree.to_vec()),
+        leaf_index: Set(i64_from_u64("leaf_index", row.leaf_index)?),
+        tree_sequence: Set(i64_from_u64("tree_sequence", row.tree_sequence)?),
         spent: Set(row.spent),
         created_at_unix_millis: Set(now_unix_millis),
         updated_at_unix_millis: Set(now_unix_millis),
@@ -370,14 +381,9 @@ fn record_from_model(
         signature: Signature::from(bytes64("signature", &model.signature)?),
         event_index: u32_from_i32("event_index", model.event_index)?,
         output_index: u8_from_i16("output_index", model.output_index)?,
-        leaf_index: model
-            .leaf_index
-            .map(|value| u64_from_i64("leaf_index", value))
-            .transpose()?,
-        tree_sequence: model
-            .tree_sequence
-            .map(|value| u64_from_i64("tree_sequence", value))
-            .transpose()?,
+        utxo_tree: bytes32("utxo_tree", &model.utxo_tree)?,
+        leaf_index: u64_from_i64("leaf_index", model.leaf_index)?,
+        tree_sequence: u64_from_i64("tree_sequence", model.tree_sequence)?,
         spent: model.spent,
     })
 }
@@ -503,6 +509,7 @@ enum ZoneDecryptedUtxos {
     Signature,
     EventIndex,
     OutputIndex,
+    UtxoTree,
     LeafIndex,
     TreeSequence,
     Spent,
@@ -530,10 +537,9 @@ mod zone_decrypted_utxos {
         pub signature: Vec<u8>,
         pub event_index: i32,
         pub output_index: i16,
-        #[sea_orm(nullable)]
-        pub leaf_index: Option<i64>,
-        #[sea_orm(nullable)]
-        pub tree_sequence: Option<i64>,
+        pub utxo_tree: Vec<u8>,
+        pub leaf_index: i64,
+        pub tree_sequence: i64,
         pub spent: bool,
         pub created_at_unix_millis: i64,
         pub updated_at_unix_millis: i64,
@@ -571,8 +577,9 @@ mod tests {
             signature: Signature::default(),
             event_index: 0,
             output_index: seed,
-            leaf_index: Some(123),
-            tree_sequence: Some(456),
+            utxo_tree: [0xee; 32],
+            leaf_index: 123,
+            tree_sequence: 456,
             spent: false,
         }
     }

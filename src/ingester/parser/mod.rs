@@ -88,23 +88,8 @@ where
         let mut ordered_instructions = Vec::new();
         ordered_instructions.push(instruction_group.outer_instruction.clone());
         ordered_instructions.extend(instruction_group.inner_instructions.clone());
-
-        // Shielded-pool Noop payloads are only trusted when emitted by the
-        // configured shielded-pool program. This keeps arbitrary Noop
-        // instructions from injecting public shielded rows.
-        let shielded_pool_program_id = get_shielded_pool_program_id();
-        let shielded_update = self::shielded_pool_event_parser::parse_shielded_pool_events(
-            &instruction_group,
-            tx.signature,
-            slot,
-            &[shielded_pool_program_id],
-        );
-        if !shielded_update.shielded_tx_events.is_empty()
-            || !shielded_update.shielded_outputs.is_empty()
-            || !shielded_update.shielded_nullifier_events.is_empty()
-        {
-            state_updates.push(shielded_update);
-        }
+        let mut group_compressed_output_contexts = Vec::new();
+        let mut group_compressed_output_index_offset = 0u32;
 
         let mut vec_accounts = Vec::<Vec<Pubkey>>::new();
         let mut vec_instructions_data = Vec::new();
@@ -122,6 +107,8 @@ where
             let state_update =
                 create_state_update_v2(conn, tx.signature, slot, event, resolver).await?;
             is_compression_transaction = true;
+            group_compressed_output_contexts
+                .extend(state_update.compressed_output_contexts.clone());
             state_updates.push(state_update);
         } else {
             for (index, instruction) in ordered_instructions.iter().enumerate() {
@@ -156,7 +143,7 @@ where
                     // If we found a NOOP instruction, exactly one or two SYSTEM_PROGRAM instructions, and all intermediates were valid
                     if let Some(noop_index) = noop_instruction_index {
                         if (1..=2).contains(&system_program_count) && all_intermediate_are_system {
-                            if let Some(state_update) = parse_public_transaction_event_v1(
+                            if let Some(mut state_update) = parse_public_transaction_event_v1(
                                 conn,
                                 tx,
                                 slot,
@@ -167,21 +154,70 @@ where
                             .await?
                             {
                                 is_compression_transaction = true;
+                                let output_count =
+                                    u32::try_from(state_update.compressed_output_contexts.len())
+                                        .map_err(|_| {
+                                            IngesterError::ParserError(
+                                                "too many compressed output contexts".to_string(),
+                                            )
+                                        })?;
+                                for context in &mut state_update.compressed_output_contexts {
+                                    context.compressed_output_index = context
+                                        .compressed_output_index
+                                        .checked_add(group_compressed_output_index_offset)
+                                        .ok_or_else(|| {
+                                            IngesterError::ParserError(
+                                                "compressed output index overflow while flattening v1 events"
+                                                    .to_string(),
+                                            )
+                                        })?;
+                                }
+                                group_compressed_output_index_offset =
+                                    group_compressed_output_index_offset
+                                        .checked_add(output_count)
+                                        .ok_or_else(|| {
+                                            IngesterError::ParserError(
+                                                "compressed output index offset overflow while flattening v1 events"
+                                                    .to_string(),
+                                            )
+                                        })?;
+                                group_compressed_output_contexts
+                                    .extend(state_update.compressed_output_contexts.clone());
                                 state_updates.push(state_update);
                             }
                         }
                     }
                 }
+            }
+        }
 
-                if ordered_instructions.len() - index > 1 {
-                    if let Some(state_update) = parse_merkle_tree_event(
-                        &ordered_instructions[index],
-                        &ordered_instructions[index + 1],
-                        tx,
-                    )? {
-                        is_compression_transaction = true;
-                        state_updates.push(state_update);
-                    }
+        // Shielded-pool Noop payloads are only trusted when emitted by the
+        // configured shielded-pool program, and each output must bind to a
+        // Light public output context from the same Solana transaction.
+        let shielded_pool_program_id = get_shielded_pool_program_id();
+        let shielded_update = self::shielded_pool_event_parser::parse_shielded_pool_events(
+            &instruction_group,
+            tx.signature,
+            slot,
+            &[shielded_pool_program_id],
+            &group_compressed_output_contexts,
+        );
+        if !shielded_update.shielded_tx_events.is_empty()
+            || !shielded_update.shielded_outputs.is_empty()
+            || !shielded_update.shielded_nullifier_events.is_empty()
+        {
+            state_updates.push(shielded_update);
+        }
+
+        for (index, _) in ordered_instructions.iter().enumerate() {
+            if ordered_instructions.len() - index > 1 {
+                if let Some(state_update) = parse_merkle_tree_event(
+                    &ordered_instructions[index],
+                    &ordered_instructions[index + 1],
+                    tx,
+                )? {
+                    is_compression_transaction = true;
+                    state_updates.push(state_update);
                 }
             }
         }

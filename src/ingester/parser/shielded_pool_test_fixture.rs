@@ -14,17 +14,31 @@
 
 use ark_bn254::Fr;
 use borsh::BorshSerialize;
+use light_compressed_account::Pubkey as LightPubkey;
 use light_poseidon::{Poseidon, PoseidonBytesHasher};
+use solana_pubkey::pubkey;
 use solana_signature::Signature;
 
+use crate::ingester::parser::indexer_events::{
+    CompressedAccount, CompressedAccountData, MerkleTreeSequenceNumberV1,
+    OutputCompressedAccountWithPackedContext, PublicTransactionEvent,
+};
 use crate::ingester::parser::shielded_pool_events::{
     EncryptedTxEphemeralKey, EncryptedTxEphemeralKeyRole, FixturePlaintextPayload,
     FixturePlaintextSidecar, ShieldedPoolTxEvent, ShieldedPoolTxKind, ShieldedPublicDelta,
     ShieldedUtxoOutputEvent, SHIELDED_POOL_TX_EVENT_V1_DISCRIMINATOR,
     SHIELDED_POOL_TX_EVENT_VERSION,
 };
-use crate::ingester::parser::{NOOP_PROGRAM_ID, SHIELDED_POOL_PROGRAM_ID};
+use crate::ingester::parser::state_update::CompressedOutputContextRecord;
+use crate::ingester::parser::{
+    get_compression_program_id, NOOP_PROGRAM_ID, SHIELDED_POOL_PROGRAM_ID,
+};
 use crate::ingester::typedefs::block_info::{Instruction, InstructionGroup, TransactionInfo};
+
+const FIXTURE_UTXO_TREE: [u8; 32] = [0xAB; 32];
+const FIXTURE_TREE_SEQUENCE: u64 = 7;
+const FIXTURE_LEAF_INDEX_BASE: u32 = 100;
+const FIXTURE_COMPRESSED_ACCOUNT_DISCRIMINATOR: [u8; 8] = *b"shldutxo";
 
 /// Owner identifiers and amounts for one fixture output. Plaintext-only;
 /// production events never carry these fields directly.
@@ -138,13 +152,10 @@ impl FixtureBuilder {
 
             output_events.push(ShieldedUtxoOutputEvent {
                 output_index: idx as u8,
+                compressed_output_index: idx as u32,
                 utxo_hash,
-                utxo_tree: None,
-                leaf_index: None,
-                tree_sequence: None,
                 encrypted_utxo,
                 encrypted_utxo_hash,
-                fmd_clue: None,
             });
             plaintext_payloads.push(payload);
         }
@@ -177,6 +188,8 @@ impl FixtureBuilder {
             outputs: output_events,
         };
 
+        let public_event = fixture_public_transaction_event(&event);
+        let public_event_bytes = borsh::to_vec(&public_event).expect("serialize public event");
         let event_bytes = event.to_event_bytes().expect("serialize event");
         let operation_commitment = event.operation_commitment;
 
@@ -185,17 +198,31 @@ impl FixtureBuilder {
             payloads: plaintext_payloads,
         };
 
-        // Build a TransactionInfo whose only instruction group is a
-        // shielded-pool outer instruction carrying a Noop CPI with event
-        // bytes. The parser must reject identical Noop bytes from unrelated
-        // outer programs, so fixtures use the same allowlisted emitter as
-        // production config.
+        // Build a TransactionInfo with both the Light public output event
+        // and the shielded event. Photon accepts the shielded output only
+        // after it can bind `compressed_output_index` to the Light output
+        // whose compressed account data_hash equals `utxo_hash`.
         let outer = Instruction {
             program_id: SHIELDED_POOL_PROGRAM_ID,
             data: vec![],
             accounts: vec![],
         };
-        let inner = Instruction {
+        let compression = Instruction {
+            program_id: get_compression_program_id(),
+            data: vec![],
+            accounts: vec![],
+        };
+        let system = Instruction {
+            program_id: pubkey!("11111111111111111111111111111111"),
+            data: vec![],
+            accounts: vec![],
+        };
+        let public_inner = Instruction {
+            program_id: NOOP_PROGRAM_ID,
+            data: public_event_bytes,
+            accounts: vec![],
+        };
+        let shielded_inner = Instruction {
             program_id: NOOP_PROGRAM_ID,
             data: event_bytes,
             accounts: vec![],
@@ -203,7 +230,7 @@ impl FixtureBuilder {
         let transaction_info = TransactionInfo {
             instruction_groups: vec![InstructionGroup {
                 outer_instruction: outer,
-                inner_instructions: vec![inner],
+                inner_instructions: vec![compression, system, public_inner, shielded_inner],
             }],
             signature: self.signature,
             error: None,
@@ -216,6 +243,76 @@ impl FixtureBuilder {
             operation_commitment,
         }
     }
+}
+
+fn fixture_public_transaction_event(event: &ShieldedPoolTxEvent) -> PublicTransactionEvent {
+    let tree = LightPubkey::from(FIXTURE_UTXO_TREE);
+    let owner = LightPubkey::from(SHIELDED_POOL_PROGRAM_ID.to_bytes());
+
+    PublicTransactionEvent {
+        input_compressed_account_hashes: vec![],
+        output_compressed_account_hashes: event
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(idx, output)| fixture_compressed_account_hash(idx, &output.utxo_hash))
+            .collect(),
+        output_compressed_accounts: event
+            .outputs
+            .iter()
+            .map(|output| OutputCompressedAccountWithPackedContext {
+                compressed_account: CompressedAccount {
+                    owner,
+                    lamports: 0,
+                    address: None,
+                    data: Some(CompressedAccountData {
+                        discriminator: FIXTURE_COMPRESSED_ACCOUNT_DISCRIMINATOR,
+                        data: Vec::new(),
+                        data_hash: output.utxo_hash,
+                    }),
+                },
+                merkle_tree_index: 0,
+            })
+            .collect(),
+        output_leaf_indices: (0..event.outputs.len())
+            .map(|idx| FIXTURE_LEAF_INDEX_BASE + idx as u32)
+            .collect(),
+        sequence_numbers: vec![MerkleTreeSequenceNumberV1 {
+            tree_pubkey: tree,
+            seq: FIXTURE_TREE_SEQUENCE,
+        }],
+        relay_fee: None,
+        is_compress: true,
+        compress_or_decompress_lamports: None,
+        pubkey_array: vec![tree],
+        message: None,
+        ata_owners: Vec::new(),
+    }
+}
+
+pub fn fixture_compressed_output_contexts(
+    event: &ShieldedPoolTxEvent,
+) -> Vec<CompressedOutputContextRecord> {
+    event
+        .outputs
+        .iter()
+        .enumerate()
+        .map(|(idx, output)| CompressedOutputContextRecord {
+            compressed_output_index: idx as u32,
+            compressed_account_hash: fixture_compressed_account_hash(idx, &output.utxo_hash),
+            tree: solana_pubkey::Pubkey::new_from_array(FIXTURE_UTXO_TREE),
+            leaf_index: (FIXTURE_LEAF_INDEX_BASE + idx as u32) as u64,
+            tree_sequence: FIXTURE_TREE_SEQUENCE,
+            data_hash: Some(output.utxo_hash),
+        })
+        .collect()
+}
+
+fn fixture_compressed_account_hash(output_index: usize, utxo_hash: &[u8; 32]) -> [u8; 32] {
+    let mut hash = [0xD0; 32];
+    hash[..4].copy_from_slice(&(output_index as u32).to_be_bytes());
+    hash[4..].copy_from_slice(&utxo_hash[..28]);
+    hash
 }
 
 /// Compute the canonical UTXO commitment over the plaintext fields. This
@@ -305,11 +402,13 @@ mod tests {
     #[test]
     fn dummy_event_round_trips_through_parser() {
         let f = fixture();
+        let contexts = fixture_compressed_output_contexts(&f.event);
         let state_update = parse_shielded_pool_events(
             &f.transaction_info.instruction_groups[0],
             Signature::default(),
             100,
             &[SHIELDED_POOL_PROGRAM_ID],
+            &contexts,
         );
         assert_eq!(state_update.shielded_tx_events.len(), 1);
         assert_eq!(state_update.shielded_outputs.len(), 1);

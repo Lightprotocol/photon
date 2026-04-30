@@ -120,15 +120,26 @@ pub struct ShieldedOutputRecord {
     pub tx_signature: Signature,
     pub event_index: u32,
     pub output_index: u8,
+    pub compressed_output_index: u32,
     pub slot: u64,
     pub utxo_hash: [u8; 32],
-    pub utxo_tree: Option<[u8; 32]>,
-    pub leaf_index: Option<u64>,
-    pub tree_sequence: Option<u64>,
+    pub compressed_account_hash: [u8; 32],
+    pub utxo_tree: [u8; 32],
+    pub leaf_index: u64,
+    pub tree_sequence: u64,
     pub encrypted_utxo: Vec<u8>,
     pub encrypted_utxo_hash: [u8; 32],
-    pub fmd_clue: Option<Vec<u8>>,
     pub zone_config_hash: Option<[u8; 32]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompressedOutputContextRecord {
+    pub compressed_output_index: u32,
+    pub compressed_account_hash: [u8; 32],
+    pub tree: Pubkey,
+    pub leaf_index: u64,
+    pub tree_sequence: u64,
+    pub data_hash: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,11 +175,14 @@ pub struct StateUpdate {
     pub shielded_tx_events: Vec<ShieldedTxEventRecord>,
     /// Per-output rows tied back to a shielded transaction event.
     pub shielded_outputs: Vec<ShieldedOutputRecord>,
-    /// Spend events for already-created UTXOs. 
+    /// Spend events for already-created UTXOs.
     pub shielded_nullifier_events: Vec<ShieldedNullifierEventRecord>,
     /// Zone config hashes encountered in this update. Used by persistence to
     /// upsert `zone_configs` rows and update `last_seen_slot`.
     pub shielded_zone_configs_seen: HashMap<[u8; 32], u64>,
+    /// Authoritative output contexts derived from Light public transaction
+    /// events. Shielded outputs bind to these by `compressed_output_index`.
+    pub compressed_output_contexts: Vec<CompressedOutputContextRecord>,
 }
 
 /// Result of filtering a StateUpdate by known trees
@@ -398,6 +412,7 @@ impl StateUpdate {
             shielded_outputs: self.shielded_outputs,
             shielded_nullifier_events: self.shielded_nullifier_events,
             shielded_zone_configs_seen: self.shielded_zone_configs_seen,
+            compressed_output_contexts: self.compressed_output_contexts,
         };
 
         Ok(FilteredStateUpdate {
@@ -459,6 +474,9 @@ impl StateUpdate {
                     .and_modify(|existing| *existing = (*existing).max(slot))
                     .or_insert(slot);
             }
+            merged
+                .compressed_output_contexts
+                .extend(update.compressed_output_contexts);
         }
 
         merged

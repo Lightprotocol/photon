@@ -60,15 +60,17 @@ pub struct ShieldedPublicDeltaView {
 pub struct ShieldedUtxoRecord {
     /// Hex-encoded canonical UTXO commitment hash. Joins with output rows.
     pub utxo_hash: String,
-    /// 32-byte UTXO tree pubkey, hex-encoded. Null until the real append
-    /// path lands
-    pub utxo_tree: Option<String>,
-    pub leaf_index: Option<u64>,
-    pub sequence_number: Option<u64>,
+    /// Index of the matching output in the Light public transaction event.
+    pub compressed_output_index: u32,
+    /// Hex-encoded compressed account hash from the Light public event.
+    pub compressed_account_hash: String,
+    /// 32-byte UTXO tree pubkey, hex-encoded.
+    pub utxo_tree: String,
+    pub leaf_index: u64,
+    pub sequence_number: u64,
     /// Hex-encoded ciphertext for this output.
     pub encrypted_utxo: String,
     pub encrypted_utxo_hash: String,
-    pub fmd_clue: Option<String>,
     pub zone_config_hash: Option<String>,
     /// Slot the event landed in.
     pub slot: u64,
@@ -326,12 +328,13 @@ fn record_from_models(
 
     Ok(ShieldedUtxoRecord {
         utxo_hash: hex_encode(&output.utxo_hash),
-        utxo_tree: output.utxo_tree.as_deref().map(hex_encode),
-        leaf_index: output.leaf_index.map(|i| i as u64),
-        sequence_number: output.tree_sequence.map(|s| s as u64),
+        compressed_output_index: output.compressed_output_index as u32,
+        compressed_account_hash: hex_encode(&output.compressed_account_hash),
+        utxo_tree: hex_encode(&output.utxo_tree),
+        leaf_index: output.leaf_index as u64,
+        sequence_number: output.tree_sequence as u64,
         encrypted_utxo: hex_encode(&output.encrypted_utxo),
         encrypted_utxo_hash: hex_encode(&output.encrypted_utxo_hash),
-        fmd_clue: output.fmd_clue.as_deref().map(hex_encode),
         zone_config_hash: output.zone_config_hash.as_deref().map(hex_encode),
         slot: output.slot as u64,
         signature,

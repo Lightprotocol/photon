@@ -135,12 +135,11 @@ pub struct EncryptedUtxoInput {
     pub tx_ephemeral_pubkey: [u8; 32],
     pub encrypted_tx_ephemeral_keys: Vec<EncryptedTxEphemeralKey>,
     pub utxo_hash: [u8; 32],
-    pub utxo_tree: Option<[u8; 32]>,
-    pub leaf_index: Option<u64>,
-    pub tree_sequence: Option<u64>,
+    pub utxo_tree: [u8; 32],
+    pub leaf_index: u64,
+    pub tree_sequence: u64,
     pub encrypted_utxo: Vec<u8>,
     pub encrypted_utxo_hash: [u8; 32],
-    pub fmd_clue: Option<Vec<u8>>,
 }
 
 impl EncryptedUtxoInput {
@@ -185,7 +184,6 @@ impl EncryptedUtxoInput {
             tree_sequence: output.tree_sequence,
             encrypted_utxo: output.encrypted_utxo.clone(),
             encrypted_utxo_hash: output.encrypted_utxo_hash,
-            fmd_clue: output.fmd_clue.clone(),
         })
     }
 }
@@ -298,6 +296,7 @@ fn validate_decrypted_row_matches_public_input(
         && row.event_index == output.event_index
         && row.output_index == output.output_index
         && row.slot == output.slot
+        && row.utxo_tree == output.utxo_tree
         && row.leaf_index == output.leaf_index
         && row.tree_sequence == output.tree_sequence;
 
@@ -466,8 +465,9 @@ mod tests {
             signature: Signature::default(),
             event_index: 0,
             output_index: seed,
-            leaf_index: Some(123),
-            tree_sequence: Some(456),
+            utxo_tree: [0xee; 32],
+            leaf_index: 123,
+            tree_sequence: 456,
             spent: false,
         }
     }
@@ -483,12 +483,11 @@ mod tests {
             tx_ephemeral_pubkey: [0x11; 32],
             encrypted_tx_ephemeral_keys: Vec::new(),
             utxo_hash: row.utxo_hash,
-            utxo_tree: None,
+            utxo_tree: row.utxo_tree,
             leaf_index: row.leaf_index,
             tree_sequence: row.tree_sequence,
             encrypted_utxo: vec![0x99],
             encrypted_utxo_hash: [0x22; 32],
-            fmd_clue: None,
         }
     }
 

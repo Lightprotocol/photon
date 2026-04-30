@@ -97,6 +97,7 @@ pub async fn persist_state_update(
         shielded_outputs,
         shielded_nullifier_events,
         shielded_zone_configs_seen,
+        compressed_output_contexts: _,
     } = state_update;
 
     let input_accounts_len = in_accounts.len();

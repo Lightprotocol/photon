@@ -135,9 +135,31 @@ where
         return Ok(StateUpdate::new());
     }
     let mut state_updates = Vec::new();
+    let mut compressed_output_index_offset = 0u32;
     for event in transaction_event.iter() {
         let mut state_update_event =
             create_state_update_v1(conn, tx, slot, event.clone().event, resolver).await?;
+        let output_count = u32::try_from(state_update_event.compressed_output_contexts.len())
+            .map_err(|_| {
+                IngesterError::ParserError("too many compressed output contexts".to_string())
+            })?;
+        for context in &mut state_update_event.compressed_output_contexts {
+            context.compressed_output_index = context
+                .compressed_output_index
+                .checked_add(compressed_output_index_offset)
+                .ok_or_else(|| {
+                    IngesterError::ParserError(
+                        "compressed output index overflow while flattening v2 events".to_string(),
+                    )
+                })?;
+        }
+        compressed_output_index_offset = compressed_output_index_offset
+            .checked_add(output_count)
+            .ok_or_else(|| {
+            IngesterError::ParserError(
+                "compressed output index offset overflow while flattening v2 events".to_string(),
+            )
+        })?;
 
         state_update_event
             .batch_nullify_context

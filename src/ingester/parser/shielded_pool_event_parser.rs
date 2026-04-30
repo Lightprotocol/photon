@@ -13,12 +13,14 @@ use crate::ingester::parser::shielded_pool_events::{
     ShieldedNullifierEvent, ShieldedPoolTxEvent, ShieldedUtxoOutputEvent,
 };
 use crate::ingester::parser::state_update::{
-    ShieldedNullifierEventRecord, ShieldedOutputRecord, ShieldedTxEventRecord, StateUpdate,
+    CompressedOutputContextRecord, ShieldedNullifierEventRecord, ShieldedOutputRecord,
+    ShieldedTxEventRecord, StateUpdate,
 };
 use crate::ingester::parser::NOOP_PROGRAM_ID;
 use crate::ingester::typedefs::block_info::InstructionGroup;
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
+use std::collections::HashMap;
 
 /// Inspect a single instruction group and add shielded-pool transaction
 /// events to the returned `StateUpdate`. Noop payloads are considered
@@ -28,6 +30,7 @@ pub fn parse_shielded_pool_events(
     tx_signature: Signature,
     slot: u64,
     allowed_emitters: &[Pubkey],
+    compressed_output_contexts: &[CompressedOutputContextRecord],
 ) -> StateUpdate {
     let mut state_update = StateUpdate::new();
 
@@ -55,6 +58,7 @@ pub fn parse_shielded_pool_events(
                         slot,
                         event,
                         &mut tx_event_index_seen,
+                        compressed_output_contexts,
                     ) {
                         log::warn!(
                             "Skipping malformed shielded-pool event in tx {}: {}",
@@ -109,6 +113,7 @@ fn apply_tx_event(
     slot: u64,
     event: ShieldedPoolTxEvent,
     tx_event_index_seen: &mut u32,
+    compressed_output_contexts: &[CompressedOutputContextRecord],
 ) -> Result<(), String> {
     let event_index = event.tx_event_index;
     if event_index != *tx_event_index_seen {
@@ -147,6 +152,62 @@ fn apply_tx_event(
         ..
     } = event;
 
+    let compressed_outputs_by_index = compressed_output_contexts
+        .iter()
+        .map(|context| (context.compressed_output_index, context))
+        .collect::<HashMap<_, _>>();
+
+    let mut output_records = Vec::with_capacity(outputs.len());
+
+    for output in outputs {
+        let ShieldedUtxoOutputEvent {
+            output_index,
+            compressed_output_index,
+            utxo_hash,
+            encrypted_utxo,
+            encrypted_utxo_hash,
+        } = output;
+        let compressed_context = compressed_outputs_by_index
+            .get(&compressed_output_index)
+            .ok_or_else(|| {
+                format!(
+                    "shielded output {} references missing compressed_output_index {}",
+                    output_index, compressed_output_index
+                )
+            })?;
+        match compressed_context.data_hash {
+            Some(data_hash) if data_hash == utxo_hash => {}
+            Some(data_hash) => {
+                return Err(format!(
+                    "shielded output {} utxo_hash does not match compressed account data_hash: {:?} != {:?}",
+                    output_index, utxo_hash, data_hash
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "shielded output {} references compressed output {} without data_hash",
+                    output_index, compressed_output_index
+                ));
+            }
+        }
+
+        output_records.push(ShieldedOutputRecord {
+            tx_signature,
+            event_index,
+            output_index,
+            compressed_output_index,
+            slot,
+            utxo_hash,
+            compressed_account_hash: compressed_context.compressed_account_hash,
+            utxo_tree: compressed_context.tree.to_bytes(),
+            leaf_index: compressed_context.leaf_index,
+            tree_sequence: compressed_context.tree_sequence,
+            encrypted_utxo,
+            encrypted_utxo_hash,
+            zone_config_hash,
+        });
+    }
+
     state_update.shielded_tx_events.push(ShieldedTxEventRecord {
         tx_signature,
         event_index,
@@ -167,33 +228,7 @@ fn apply_tx_event(
         public_delta,
         relayer_fee,
     });
-
-    for output in outputs {
-        let ShieldedUtxoOutputEvent {
-            output_index,
-            utxo_hash,
-            utxo_tree,
-            leaf_index,
-            tree_sequence,
-            encrypted_utxo,
-            encrypted_utxo_hash,
-            fmd_clue,
-        } = output;
-        state_update.shielded_outputs.push(ShieldedOutputRecord {
-            tx_signature,
-            event_index,
-            output_index,
-            slot,
-            utxo_hash,
-            utxo_tree,
-            leaf_index,
-            tree_sequence,
-            encrypted_utxo,
-            encrypted_utxo_hash,
-            fmd_clue,
-            zone_config_hash,
-        });
-    }
+    state_update.shielded_outputs.extend(output_records);
 
     Ok(())
 }
@@ -261,6 +296,7 @@ mod tests {
         ShieldedPublicDelta, ShieldedUtxoOutputEvent, SHIELDED_POOL_TX_EVENT_V1_DISCRIMINATOR,
         SHIELDED_POOL_TX_EVENT_VERSION,
     };
+    use crate::ingester::parser::state_update::CompressedOutputContextRecord;
     use crate::ingester::parser::SHIELDED_POOL_PROGRAM_ID;
     use crate::ingester::typedefs::block_info::Instruction;
     use solana_pubkey::Pubkey;
@@ -305,20 +341,31 @@ mod tests {
             Signature::default(),
             100,
             &[SHIELDED_POOL_PROGRAM_ID],
+            &sample_compressed_output_contexts(4),
         )
+    }
+
+    fn sample_compressed_output_contexts(count: u32) -> Vec<CompressedOutputContextRecord> {
+        (0..count)
+            .map(|i| CompressedOutputContextRecord {
+                compressed_output_index: i,
+                compressed_account_hash: [0xa0u8.wrapping_add(i as u8); 32],
+                tree: Pubkey::new_from_array([0xb0u8.wrapping_add(i as u8); 32]),
+                leaf_index: 10 + i as u64,
+                tree_sequence: 100 + i as u64,
+                data_hash: Some([i as u8; 32]),
+            })
+            .collect()
     }
 
     fn sample_tx_event(index: u32, output_count: u8) -> ShieldedPoolTxEvent {
         let outputs = (0..output_count)
             .map(|i| ShieldedUtxoOutputEvent {
                 output_index: i,
+                compressed_output_index: i as u32,
                 utxo_hash: [i; 32],
-                utxo_tree: None,
-                leaf_index: None,
-                tree_sequence: None,
                 encrypted_utxo: vec![1, 2, 3, i],
                 encrypted_utxo_hash: [i ^ 0xff; 32],
-                fmd_clue: None,
             })
             .collect();
         ShieldedPoolTxEvent {
@@ -374,6 +421,30 @@ mod tests {
         assert_eq!(state_update.shielded_outputs[0].output_index, 0);
         assert_eq!(state_update.shielded_outputs[1].output_index, 1);
         assert_eq!(state_update.shielded_outputs[0].slot, 100);
+        assert_eq!(state_update.shielded_outputs[0].compressed_output_index, 0);
+        assert_eq!(state_update.shielded_outputs[0].leaf_index, 10);
+        assert_eq!(state_update.shielded_outputs[0].tree_sequence, 100);
+        assert_eq!(
+            state_update.shielded_outputs[0].compressed_account_hash,
+            [0xa0; 32]
+        );
+    }
+
+    #[test]
+    fn skips_event_without_matching_compressed_output_context() {
+        let event = sample_tx_event(0, 1);
+        let group = authorized_group(vec![noop_instruction(event.to_event_bytes().unwrap())]);
+
+        let state_update = parse_shielded_pool_events(
+            &group,
+            Signature::default(),
+            100,
+            &[SHIELDED_POOL_PROGRAM_ID],
+            &[],
+        );
+
+        assert_eq!(state_update.shielded_tx_events.len(), 0);
+        assert_eq!(state_update.shielded_outputs.len(), 0);
     }
 
     #[test]

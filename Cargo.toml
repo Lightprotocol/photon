@@ -33,6 +33,11 @@ path = "src/snapshot/loader/main.rs"
 name = "photon-tree-validator"
 path = "src/tools/tree_validator/main.rs"
 
+[[bin]]
+name = "zone-rpc"
+path = "src/zone_rpc_main.rs"
+required-features = ["zone-rpc-prototype"]
+
 [dependencies]
 ark-serialize = "0.5"
 ark-bn254 = "0.5"

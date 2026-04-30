@@ -1,7 +1,9 @@
 use crate::common::typedefs::account::AccountWithContext;
 use crate::ingester::error::IngesterError;
 use crate::ingester::parser::indexer_events::PublicTransactionEvent;
-use crate::ingester::parser::state_update::{AccountTransaction, StateUpdate};
+use crate::ingester::parser::state_update::{
+    AccountTransaction, CompressedOutputContextRecord, StateUpdate,
+};
 use crate::ingester::parser::tree_info::{TreeInfo, TreeResolver};
 use crate::ingester::parser::{get_compression_program_id, NOOP_PROGRAM_ID};
 use crate::ingester::typedefs::block_info::{Instruction, TransactionInfo};
@@ -87,7 +89,24 @@ where
         .enumerate()
     {
         let tree = transaction_event.pubkey_array[out_account.merkle_tree_index as usize];
+        let tree_sequence = *tree_to_seq_number
+            .get(&tree)
+            .ok_or_else(|| IngesterError::ParserError("Missing sequence number".to_string()))?;
         let tree_solana = solana_pubkey::Pubkey::new_from_array(tree.to_bytes());
+        state_update
+            .compressed_output_contexts
+            .push(CompressedOutputContextRecord {
+                compressed_output_index: output_index as u32,
+                compressed_account_hash: *hash,
+                tree: tree_solana,
+                leaf_index: *leaf_index as u64,
+                tree_sequence,
+                data_hash: out_account
+                    .compressed_account
+                    .data
+                    .as_ref()
+                    .map(|data| data.data_hash),
+            });
         let tree_and_queue = match TreeInfo::get_by_pubkey(conn, &tree_solana)
             .await
             .map_err(|e| IngesterError::ParserError(format!("Failed to get tree info: {}", e)))?

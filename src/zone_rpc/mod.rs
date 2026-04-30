@@ -6,8 +6,12 @@
 //! this feature for production Photon binaries; the production sidecar should
 //! move into its own crate/process with a private database.
 
+pub mod api;
+pub mod jobs;
 pub mod plaintext_projection;
 pub mod private_api;
 pub mod private_db;
+pub mod prover_client;
+pub mod server;
 pub mod types;
 pub mod workers;

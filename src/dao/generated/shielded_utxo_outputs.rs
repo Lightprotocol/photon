@@ -11,19 +11,16 @@ pub struct Model {
     pub event_index: i32,
     #[sea_orm(primary_key, auto_increment = false)]
     pub output_index: i16,
+    pub compressed_output_index: i32,
     pub slot: i64,
     #[sea_orm(unique)]
     pub utxo_hash: Vec<u8>,
-    #[sea_orm(nullable)]
-    pub utxo_tree: Option<Vec<u8>>,
-    #[sea_orm(nullable)]
-    pub leaf_index: Option<i64>,
-    #[sea_orm(nullable)]
-    pub tree_sequence: Option<i64>,
+    pub compressed_account_hash: Vec<u8>,
+    pub utxo_tree: Vec<u8>,
+    pub leaf_index: i64,
+    pub tree_sequence: i64,
     pub encrypted_utxo: Vec<u8>,
     pub encrypted_utxo_hash: Vec<u8>,
-    #[sea_orm(nullable)]
-    pub fmd_clue: Option<Vec<u8>>,
     #[sea_orm(nullable)]
     pub zone_config_hash: Option<Vec<u8>>,
 }
