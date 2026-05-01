@@ -1,0 +1,94 @@
+{
+  "expected": {
+    "batchAppendSequence": 1,
+    "compressedAccountHash": "0x2c50b6c5567483ca254f4725e8cab94330ba3929cedc3f0494bf9acd6d7bc298",
+    "dataHash": "0x17fa8974fff8ca1375a813457f3f78fc34d4ebd922ba94120b0e67ad2cece6b6",
+    "encryptedUtxoHash": "0x23eb619b8ad0060898a4ee73676d28ba465d1a6fb8bdf15c1191ca4e553d7cd2",
+    "operationCommitment": "0x6666666666666666666666666666666666666666666666666666666666666666",
+    "outputLeafIndex": 0,
+    "outputQueue": "oq1na8gojfdUhsfCpyjNt6h4JaDWtHf1yQj4koBWfto",
+    "treeSequence": 0,
+    "utxoHash": "0x12c96ee6a45c2661acebcf08a8a1b3331c343fc26797ced0f490f6fa219b0416",
+    "utxoTree": "bmt1LryLZUMmF7ZtqESaw7wifBXLfXHQYoE4GAmrahU",
+    "zoneConfigHash": "0x7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "schemaVersion": 1,
+  "source": "program-tests/system-cpi-v2-test/proofless_shielded_append_emits_light_and_shielded_events",
+  "transaction": {
+    "accountCompressionInstruction": {
+      "accounts": [
+        "HwXnGK3tPkkVY6P439H2p68AxpeuWXd5PcrAxFpbmfbA",
+        "35hkDgaAKwMCaxRz2ocSZ6NaUrtKkyNqU6c4RV3tYJRh",
+        "oq1na8gojfdUhsfCpyjNt6h4JaDWtHf1yQj4koBWfto"
+      ],
+      "data": "0xb48f9f99232ef8a3a600000001ff00010000000000000000000000000000000000000000000000000000000000000000000001002c50b6c5567483ca254f4725e8cab94330ba3929cedc3f0494bf9acd6d7bc29800000108e87e298f0faa26c9d8ef41d7e9e92596a70fa93eb99f08f8cdd1f59d8ec8170bff019d63e059fbec084dabe27379eab6fdad7973902a54d7562e194d42073c030000000000000000000000000000000000010000000000000000",
+      "name": "account_compression_instruction",
+      "programId": "compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq"
+    },
+    "batchAppendInstruction": {
+      "accounts": [
+        "bmt1LryLZUMmF7ZtqESaw7wifBXLfXHQYoE4GAmrahU"
+      ],
+      "data": "0x",
+      "name": "batch_append_instruction",
+      "programId": "compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq"
+    },
+    "batchAppendNoopInstruction": {
+      "accounts": [],
+      "data": "0x0308e87e298f0faa26c9d8ef41d7e9e92596a70fa93eb99f08f8cdd1f59d8ec817000000000000000000000000000000000100000000000000000000000000000001000000000000009191919191919191919191919191919191919191919191919191919191919191010000000100000000000000010bff019d63e059fbec084dabe27379eab6fdad7973902a54d7562e194d42073c",
+      "name": "batch_append_noop_instruction",
+      "programId": "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV"
+    },
+    "lightSystemInstruction": {
+      "accounts": [
+        "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+        "HZH7qSLcpAeDqCopVU4e5XkhT9j3JFsQiq8CmruY3aru",
+        "35hkDgaAKwMCaxRz2ocSZ6NaUrtKkyNqU6c4RV3tYJRh",
+        "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV",
+        "HwXnGK3tPkkVY6P439H2p68AxpeuWXd5PcrAxFpbmfbA",
+        "compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq",
+        "FNt7byTHev1k5x2cXZLBr8TdWiC3zoP5vcnZR4P682Uy",
+        "SySTEM1eSU2p4BGQfQpimFEWWSC1XDFeun3Nqzz3rT7",
+        "SySTEM1eSU2p4BGQfQpimFEWWSC1XDFeun3Nqzz3rT7",
+        "11111111111111111111111111111111",
+        "SySTEM1eSU2p4BGQfQpimFEWWSC1XDFeun3Nqzz3rT7",
+        "oq1na8gojfdUhsfCpyjNt6h4JaDWtHf1yQj4koBWfto"
+      ],
+      "data": "0x31d4bf8127c22bc46800000000000000000000000001000000d59e9bcb1ad3c1c30bdb099b3aac3ac8fe4be76a1fa8b74cb371ea65bf639c620000000000000000000173686c64757478310000000012c96ee6a45c2661acebcf08a8a1b3331c343fc26797ced0f490f6fa219b04160000000000",
+      "name": "light_system_instruction",
+      "programId": "SySTEM1eSU2p4BGQfQpimFEWWSC1XDFeun3Nqzz3rT7"
+    },
+    "shieldedEventNoopInstruction": {
+      "accounts": [],
+      "data": "0x73686c64706c7631010000000000004242424242424242424242424242424242424242424242424242424242424242017777777777777777777777777777777777777777777777777777777777777777333333333333333333333333333333333333333333333333333333333333333301000000000100000001000000444444444444444444444444444444444444444444444444444444444444444420000000555555555555555555555555555555555555555555555555555555555555555566666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666600000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000012c96ee6a45c2661acebcf08a8a1b3331c343fc26797ced0f490f6fa219b041604000000c1c2c3c423eb619b8ad0060898a4ee73676d28ba465d1a6fb8bdf15c1191ca4e553d7cd2",
+      "name": "shielded_event_noop_instruction",
+      "programId": "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV"
+    },
+    "shieldedProgramInstruction": {
+      "accounts": [
+        "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+        "SySTEM1eSU2p4BGQfQpimFEWWSC1XDFeun3Nqzz3rT7",
+        "compr6CUsB5m2jS4Y3831ztGSTnDpnKJTKS95d64XVq",
+        "HwXnGK3tPkkVY6P439H2p68AxpeuWXd5PcrAxFpbmfbA",
+        "35hkDgaAKwMCaxRz2ocSZ6NaUrtKkyNqU6c4RV3tYJRh",
+        "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV",
+        "FNt7byTHev1k5x2cXZLBr8TdWiC3zoP5vcnZR4P682Uy",
+        "HZH7qSLcpAeDqCopVU4e5XkhT9j3JFsQiq8CmruY3aru",
+        "11111111111111111111111111111111",
+        "oq1na8gojfdUhsfCpyjNt6h4JaDWtHf1yQj4koBWfto"
+      ],
+      "data": "0x542f0303c59134a07777777777777777777777777777777777777777777777777777777777777777666666666666666666666666666666666666666666666666666666666666666612c96ee6a45c2661acebcf08a8a1b3331c343fc26797ced0f490f6fa219b041604000000c1c2c3c423eb619b8ad0060898a4ee73676d28ba465d1a6fb8bdf15c1191ca4e553d7cd2ff",
+      "name": "shielded_program_instruction",
+      "programId": "FNt7byTHev1k5x2cXZLBr8TdWiC3zoP5vcnZR4P682Uy"
+    },
+    "systemInstruction": {
+      "accounts": [
+        "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+        "oq1na8gojfdUhsfCpyjNt6h4JaDWtHf1yQj4koBWfto"
+      ],
+      "data": "0x020000008913000000000000",
+      "name": "system_instruction",
+      "programId": "11111111111111111111111111111111"
+    }
+  }
+}

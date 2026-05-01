@@ -314,15 +314,15 @@ impl InMemoryZonePrivateStore {
 mod tests {
     use super::*;
     use crate::ingester::parser::shielded_pool_test_fixture::{
-        fixture_compressed_output_contexts, DummyShieldedPoolFixture, FixtureBuilder,
+        fixture_compressed_output_contexts, CapturedShieldedPoolFixture, FixtureBuilder,
         FixtureOwnerSpec,
     };
     use crate::ingester::parser::{
-        shielded_pool_event_parser::parse_shielded_pool_events, SHIELDED_POOL_PROGRAM_ID,
+        shielded_pool_event_parser::parse_shielded_pool_events, SHIELDED_POOL_TEST_PROGRAM_ID,
     };
     use solana_signature::Signature;
 
-    fn fixture() -> DummyShieldedPoolFixture {
+    fn fixture() -> CapturedShieldedPoolFixture {
         let owner = FixtureOwnerSpec {
             owner_pubkey: [0xAA; 32],
             token_mint: [0xBB; 32],
@@ -333,14 +333,14 @@ mod tests {
         FixtureBuilder::proofless_shield_one_output(Signature::default(), owner).build()
     }
 
-    fn parse_fixture(fixture: &DummyShieldedPoolFixture) -> StateUpdate {
+    fn parse_fixture(fixture: &CapturedShieldedPoolFixture) -> StateUpdate {
         let group = &fixture.transaction_info.instruction_groups[0];
         let contexts = fixture_compressed_output_contexts(&fixture.event);
         parse_shielded_pool_events(
             group,
             fixture.transaction_info.signature,
             100,
-            &[SHIELDED_POOL_PROGRAM_ID],
+            &[SHIELDED_POOL_TEST_PROGRAM_ID],
             &contexts,
         )
     }

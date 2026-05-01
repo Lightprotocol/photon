@@ -78,8 +78,8 @@ pub fn parse_shielded_pool_events(
             continue;
         }
 
-        if matches_nullifier_discriminator(data) {
-            match try_decode_nullifier_event(data) {
+        if ShieldedNullifierEvent::matches_discriminator(data) {
+            match ShieldedNullifierEvent::from_event_bytes(data) {
                 Ok(event) => {
                     if let Err(err) = apply_nullifier_event(
                         &mut state_update,
@@ -233,35 +233,6 @@ fn apply_tx_event(
     Ok(())
 }
 
-/// Discriminator for the spend event. Mirrors the tx event in shape but uses
-/// a distinct prefix so the two events don't shadow each other.
-pub const SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR: [u8; 8] =
-    [b's', b'h', b'l', b'd', b'n', b'l', b'v', b'1'];
-
-fn matches_nullifier_discriminator(data: &[u8]) -> bool {
-    data.len() >= SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR.len()
-        && data[..SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR.len()]
-            == SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR
-}
-
-fn try_decode_nullifier_event(data: &[u8]) -> Result<ShieldedNullifierEvent, std::io::Error> {
-    use borsh::BorshDeserialize;
-    let event = ShieldedNullifierEvent::try_from_slice(data)?;
-    if event.event_discriminator != SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "nullifier event discriminator mismatch",
-        ));
-    }
-    if event.version != 1 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "unsupported shielded-pool nullifier event version",
-        ));
-    }
-    Ok(event)
-}
-
 fn apply_nullifier_event(
     state_update: &mut StateUpdate,
     tx_signature: Signature,
@@ -293,8 +264,9 @@ mod tests {
     use super::*;
     use crate::ingester::parser::shielded_pool_events::{
         EncryptedTxEphemeralKey, EncryptedTxEphemeralKeyRole, ShieldedPoolTxKind,
-        ShieldedPublicDelta, ShieldedUtxoOutputEvent, SHIELDED_POOL_TX_EVENT_V1_DISCRIMINATOR,
-        SHIELDED_POOL_TX_EVENT_VERSION,
+        ShieldedPublicDelta, ShieldedUtxoOutputEvent,
+        SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR, SHIELDED_POOL_NULLIFIER_EVENT_VERSION,
+        SHIELDED_POOL_TX_EVENT_V1_DISCRIMINATOR, SHIELDED_POOL_TX_EVENT_VERSION,
     };
     use crate::ingester::parser::state_update::CompressedOutputContextRecord;
     use crate::ingester::parser::SHIELDED_POOL_PROGRAM_ID;
@@ -400,7 +372,7 @@ mod tests {
     fn sample_nullifier_event(index: u32) -> ShieldedNullifierEvent {
         ShieldedNullifierEvent {
             event_discriminator: SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR,
-            version: 1,
+            version: SHIELDED_POOL_NULLIFIER_EVENT_VERSION,
             nullifier: [0x11; 32],
             nullifier_tree: [0x22; 32],
             tx_event_index: index,

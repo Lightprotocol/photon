@@ -8,9 +8,9 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use light_compressed_account::hash_to_bn254_field_size_be;
+use light_compressed_account::{address::derive_address, hash_to_bn254_field_size_be};
 use num_bigint::BigUint;
-use sea_orm::{DatabaseConnection, EntityTrait, TransactionTrait};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -31,8 +31,15 @@ use crate::api::method::utils::HashRequest;
 use crate::common::typedefs::hash::Hash;
 use crate::common::typedefs::serializable_pubkey::SerializablePubkey;
 use crate::common::typedefs::serializable_signature::SerializableSignature;
-use crate::dao::generated::{accounts, tree_metadata, zone_configs};
+use crate::dao::generated::{
+    accounts, state_tree_histories, state_trees, tree_metadata, zone_configs,
+};
 use crate::zone_rpc::jobs::{LocalZoneJobStore, ZoneJobKind};
+use crate::zone_rpc::local_masp::{
+    LocalMaspError, LocalMaspWitnessSecrets, LocalMaspZoneFixtureSpec,
+};
+use crate::zone_rpc::local_relayer::LocalRelayerError;
+use crate::zone_rpc::local_verifier::LocalVerifierError;
 use crate::zone_rpc::private_api::{
     GetZoneUtxosByOwnerHashRequest, GetZoneUtxosByOwnerPubkeyRequest,
     ZoneDecryptedUtxoListResponse, ZoneQueryAuthorization, ZoneRpcPrivateApi,
@@ -88,6 +95,24 @@ impl From<ProverClientError> for ZoneRpcApiError {
     }
 }
 
+impl From<LocalMaspError> for ZoneRpcApiError {
+    fn from(err: LocalMaspError) -> Self {
+        Self::Validation(err.to_string())
+    }
+}
+
+impl From<LocalRelayerError> for ZoneRpcApiError {
+    fn from(err: LocalRelayerError) -> Self {
+        Self::Validation(err.to_string())
+    }
+}
+
+impl From<LocalVerifierError> for ZoneRpcApiError {
+    fn from(err: LocalVerifierError) -> Self {
+        Self::Validation(err.to_string())
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FetchUtxosRequest {
@@ -125,6 +150,9 @@ pub struct FetchProofInputsRequest {
     #[serde(default)]
     pub spend_nullifiers: Vec<String>,
     pub nullifier_tree: Option<SerializablePubkey>,
+    /// Program id used by Light AddressV2 derivation:
+    /// derive_address(spend_nullifier, nullifier_tree, shielded_pool_program_id).
+    pub shielded_pool_program_id: Option<SerializablePubkey>,
     pub utxo_root_sequence: Option<u64>,
     pub nullifier_root_sequence: Option<u64>,
     pub authorization: ZoneQueryAuthorization,
@@ -261,6 +289,10 @@ pub struct ZoneProofJobView {
     pub circuit_type: String,
     pub prover_job_id: Option<String>,
     pub status: ZoneJobStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_inputs_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_inputs: Option<serde_json::Value>,
     pub result: Option<String>,
     pub error: Option<String>,
 }
@@ -553,9 +585,16 @@ impl ZoneRpcApi {
         if let (Some(nullifier_tree), Some(spend_nullifiers)) =
             (request.nullifier_tree, spend_nullifiers.as_ref())
         {
+            let shielded_pool_program_id = request.shielded_pool_program_id.ok_or_else(|| {
+                ZoneRpcApiError::Validation(
+                    "shieldedPoolProgramId is required with spendNullifiers and nullifierTree"
+                        .to_string(),
+                )
+            })?;
             let nullifier_proofs = fetch_nullifier_non_inclusion_proofs(
                 self.photon_conn.as_ref(),
                 nullifier_tree,
+                shielded_pool_program_id,
                 spend_nullifiers,
             )
             .await?;
@@ -628,11 +667,16 @@ impl ZoneRpcApi {
 
         let mut proof_jobs = Vec::with_capacity(request.proof_requests.len());
         for proof_request in request.proof_requests {
+            let (public_inputs_hash, verifier_inputs) =
+                proof_request_verifier_metadata(&proof_request)?;
             let submission = proof_client
                 .submit_proof(&proof_request, prover_mode)
                 .await
                 .map_err(ZoneRpcApiError::from)?;
-            proof_jobs.push(ZoneProofJobView::from(submission));
+            let mut proof_job = ZoneProofJobView::from(submission);
+            proof_job.public_inputs_hash = public_inputs_hash;
+            proof_job.verifier_inputs = verifier_inputs;
+            proof_jobs.push(proof_job);
         }
 
         let status = aggregate_proof_job_status(&proof_jobs);
@@ -647,12 +691,80 @@ impl ZoneRpcApi {
         })
     }
 
+    pub fn build_local_dev_masp_proof_requests(
+        &self,
+        proof_inputs: &FetchProofInputsResponse,
+        decrypted_inputs: &[crate::zone_rpc::private_api::ZoneDecryptedUtxoView],
+    ) -> Result<Vec<ProverProofRequest>, ZoneRpcApiError> {
+        crate::zone_rpc::local_masp::build_local_dev_stub_proof_requests(
+            proof_inputs,
+            decrypted_inputs,
+        )
+        .map_err(ZoneRpcApiError::from)
+    }
+
+    pub fn build_local_dev_masp_zone_fixture_spec(
+        &self,
+        proof_inputs: &FetchProofInputsResponse,
+        decrypted_inputs: &[crate::zone_rpc::private_api::ZoneDecryptedUtxoView],
+        secrets: &LocalMaspWitnessSecrets,
+    ) -> Result<LocalMaspZoneFixtureSpec, ZoneRpcApiError> {
+        crate::zone_rpc::local_masp::build_local_dev_zone_fixture_spec(
+            proof_inputs,
+            decrypted_inputs,
+            secrets,
+        )
+        .map_err(ZoneRpcApiError::from)
+    }
+
     pub async fn submit_intent(
         &self,
         request: SubmitIntentRequest,
     ) -> Result<SubmitIntentResponse, ZoneRpcApiError> {
         validate_signed_intent(&request.intent)?;
-        let job = self.job_store.create_queued_job(ZoneJobKind::Relayer);
+        let proof_job_id = crate::zone_rpc::local_relayer::proof_job_id_from_intent_payload(
+            &request.intent.intent_payload,
+        )?;
+        let proof_job = self
+            .job_store
+            .get_job(&proof_job_id)
+            .ok_or(ZoneRpcApiError::JobNotFound(proof_job_id))?;
+        if proof_job.status != ZoneJobStatus::Succeeded {
+            return Err(ZoneRpcApiError::Validation(format!(
+                "submit_intent requires proof job {} to be succeeded, got {:?}",
+                proof_job.job_id, proof_job.status
+            )));
+        }
+        let Some(proof_job_result) = proof_job.result.as_deref() else {
+            return Err(ZoneRpcApiError::Validation(format!(
+                "proof job {} is missing result payload",
+                proof_job.job_id
+            )));
+        };
+        let proof_jobs =
+            serde_json::from_str::<Vec<ZoneProofJobView>>(proof_job_result).map_err(|err| {
+                ZoneRpcApiError::Validation(format!(
+                    "proof job {} result is not a proof bundle: {err}",
+                    proof_job.job_id
+                ))
+            })?;
+        let mut relayer_result = crate::zone_rpc::local_relayer::build_local_relayer_job_result(
+            &request.intent,
+            &proof_jobs,
+        )?;
+        let verifier_result = crate::zone_rpc::local_verifier::verify_local_transaction_candidate(
+            &relayer_result.transaction_candidate,
+        )?;
+        verify_local_verifier_roots(self.photon_conn.as_ref(), &verifier_result).await?;
+        relayer_result.local_verifier = Some(verifier_result);
+        let result = serde_json::to_string(&relayer_result)
+            .map_err(|err| ZoneRpcApiError::Validation(err.to_string()))?;
+        let job = self.job_store.create_job(
+            ZoneJobKind::Relayer,
+            ZoneJobStatus::Succeeded,
+            Some(result),
+            None,
+        );
         Ok(SubmitIntentResponse {
             relayer_job_id: job.job_id,
         })
@@ -730,7 +842,15 @@ impl ZoneRpcApi {
                 .get_proof_status(&prover_job_id)
                 .await
                 .map_err(ZoneRpcApiError::from)?;
+            let circuit_type = proof_job.circuit_type.clone();
+            let public_inputs_hash = proof_job.public_inputs_hash.clone();
+            let verifier_inputs = proof_job.verifier_inputs.clone();
             *proof_job = ZoneProofJobView::from(status);
+            if proof_job.circuit_type == "unknown" {
+                proof_job.circuit_type = circuit_type;
+            }
+            proof_job.public_inputs_hash = public_inputs_hash;
+            proof_job.verifier_inputs = verifier_inputs;
             changed = true;
         }
         if changed {
@@ -756,6 +876,8 @@ impl From<ProverProofSubmission> for ZoneProofJobView {
             circuit_type: submission.circuit_type,
             prover_job_id: submission.prover_job_id,
             status: ZoneJobStatus::from(submission.status),
+            public_inputs_hash: None,
+            verifier_inputs: None,
             result: submission.result,
             error: submission.error,
         }
@@ -793,6 +915,135 @@ fn aggregate_proof_job_status(proof_jobs: &[ZoneProofJobView]) -> ZoneJobStatus 
         return ZoneJobStatus::Running;
     }
     ZoneJobStatus::Queued
+}
+
+fn proof_request_verifier_metadata(
+    proof_request: &ProverProofRequest,
+) -> Result<(Option<String>, Option<serde_json::Value>), ZoneRpcApiError> {
+    let value =
+        serde_json::from_str::<serde_json::Value>(&proof_request.payload).map_err(|err| {
+            ZoneRpcApiError::Validation(format!("proof request payload is not JSON: {err}"))
+        })?;
+    let public_inputs_hash = value
+        .get("publicInputsHash")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let verifier_inputs = match proof_request.circuit_type.as_str() {
+        "masp-utxo" | "masp-tree" => {
+            let verifier_inputs =
+                crate::zone_rpc::local_verifier::verifier_inputs_from_masp_payload(
+                    &proof_request.circuit_type,
+                    &value,
+                )?;
+            let public_inputs_hash = public_inputs_hash.as_deref().ok_or_else(|| {
+                ZoneRpcApiError::Validation(format!(
+                    "{} proof request missing publicInputsHash",
+                    proof_request.circuit_type
+                ))
+            })?;
+            crate::zone_rpc::local_verifier::verify_public_inputs_hash(
+                &proof_request.circuit_type,
+                public_inputs_hash,
+                &verifier_inputs,
+            )?;
+            Some(verifier_inputs)
+        }
+        _ => None,
+    };
+    Ok((public_inputs_hash, verifier_inputs))
+}
+
+async fn verify_local_verifier_roots(
+    conn: &DatabaseConnection,
+    verifier_result: &crate::zone_rpc::local_verifier::LocalVerifierCheckResult,
+) -> Result<(), ZoneRpcApiError> {
+    verify_root_sequence(
+        conn,
+        "utxo",
+        &verifier_result.utxo_tree_id,
+        &verifier_result.utxo_root,
+        verifier_result.utxo_root_sequence,
+        verifier_result.utxo_root_index,
+    )
+    .await?;
+    verify_root_sequence(
+        conn,
+        "nullifier",
+        &verifier_result.nullifier_tree_id,
+        &verifier_result.nullifier_root,
+        verifier_result.nullifier_root_sequence,
+        verifier_result.nullifier_root_index,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn verify_root_sequence(
+    conn: &DatabaseConnection,
+    label: &str,
+    tree_hex: &str,
+    root_hex: &str,
+    root_sequence: u64,
+    root_index: u64,
+) -> Result<(), ZoneRpcApiError> {
+    let tree = decode_hex_32(tree_hex, &format!("{label}TreeId"))?;
+    let root = decode_hex_32(root_hex, &format!("{label}Root"))?;
+    let indexed_root = root_hash_for_sequence(conn, &tree, root_sequence)
+        .await?
+        .ok_or_else(|| {
+            ZoneRpcApiError::ProofInputUnavailable(format!(
+                "{label} root for tree {} at sequence {root_sequence} is not indexed in current or historical roots",
+                hex_encode(&tree)
+            ))
+        })?;
+    if indexed_root != root.to_vec() {
+        return Err(ZoneRpcApiError::Validation(format!(
+            "{label} root {} does not match indexed root {} for sequence {root_sequence}",
+            hex_encode(&root),
+            hex_encode(&indexed_root)
+        )));
+    }
+    let capacity = root_history_capacity_for_tree(conn, &tree)
+        .await?
+        .ok_or_else(|| {
+            ZoneRpcApiError::ProofInputUnavailable(format!(
+                "{label} root history capacity is unavailable"
+            ))
+        })?;
+    let expected_index = root_sequence % capacity;
+    if root_index != expected_index {
+        return Err(ZoneRpcApiError::Validation(format!(
+            "{label} root index {root_index} does not match sequence {root_sequence} modulo capacity {capacity}"
+        )));
+    }
+    Ok(())
+}
+
+async fn root_hash_for_sequence(
+    conn: &DatabaseConnection,
+    tree: &[u8; 32],
+    root_sequence: u64,
+) -> Result<Option<Vec<u8>>, ZoneRpcApiError> {
+    if let Some(current_root) = state_trees::Entity::find()
+        .filter(state_trees::Column::Tree.eq(tree.to_vec()))
+        .filter(state_trees::Column::NodeIdx.eq(1))
+        .filter(state_trees::Column::Seq.eq(Some(root_sequence as i64)))
+        .one(conn)
+        .await
+        .map_err(|err| ZoneRpcApiError::Photon(err.to_string()))?
+    {
+        return Ok(Some(current_root.hash));
+    }
+
+    let historical_root = state_tree_histories::Entity::find()
+        .filter(state_tree_histories::Column::Tree.eq(tree.to_vec()))
+        .filter(state_tree_histories::Column::Seq.eq(root_sequence as i64))
+        .one(conn)
+        .await
+        .map_err(|err| ZoneRpcApiError::Photon(err.to_string()))?
+        .and_then(|history| history.root_hash);
+
+    Ok(historical_root)
 }
 
 struct LightAccountBindingView {
@@ -876,6 +1127,7 @@ async fn attach_utxo_root_indices(
 async fn fetch_nullifier_non_inclusion_proofs(
     conn: &DatabaseConnection,
     nullifier_tree: SerializablePubkey,
+    shielded_pool_program_id: SerializablePubkey,
     nullifiers: &[[u8; 32]],
 ) -> Result<Vec<NullifierNonInclusionProofView>, ZoneRpcApiError> {
     let root_history_capacity =
@@ -899,7 +1151,11 @@ async fn fetch_nullifier_non_inclusion_proofs(
     let addresses = nullifiers
         .iter()
         .map(|nullifier| AddressWithTree {
-            address: SerializablePubkey::from(*nullifier),
+            address: SerializablePubkey::from(derive_indexed_nullifier_address(
+                *nullifier,
+                nullifier_tree,
+                shielded_pool_program_id,
+            )),
             tree: nullifier_tree,
         })
         .collect::<Vec<_>>();
@@ -921,6 +1177,18 @@ async fn fetch_nullifier_non_inclusion_proofs(
             )
         })
         .collect())
+}
+
+fn derive_indexed_nullifier_address(
+    spend_nullifier: [u8; 32],
+    nullifier_tree: SerializablePubkey,
+    shielded_pool_program_id: SerializablePubkey,
+) -> [u8; 32] {
+    derive_address(
+        &spend_nullifier,
+        &nullifier_tree.0.to_bytes(),
+        &shielded_pool_program_id.0.to_bytes(),
+    )
 }
 
 fn nullifier_non_inclusion_proof_view(
@@ -1404,6 +1672,7 @@ mod tests {
             input_utxo_hashes: vec![hex_encode(&[2u8; 32])],
             spend_nullifiers: vec![hex_encode(&[3u8; 32])],
             nullifier_tree: None,
+            shielded_pool_program_id: None,
             utxo_root_sequence: None,
             nullifier_root_sequence: None,
             authorization,
@@ -1414,6 +1683,7 @@ mod tests {
         ));
 
         request.nullifier_tree = Some(SerializablePubkey::from([4u8; 32]));
+        request.shielded_pool_program_id = Some(SerializablePubkey::from([6u8; 32]));
         let decoded = decode_spend_nullifiers(&request).unwrap().unwrap();
         assert_eq!(decoded, vec![[3u8; 32]]);
 

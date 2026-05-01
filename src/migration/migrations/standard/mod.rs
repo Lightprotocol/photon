@@ -19,6 +19,7 @@ pub mod m20260201_000002_add_ata_owner;
 pub mod m20260210_000002_add_ata_owner_index;
 pub mod m20260220_000001_add_discriminator_v2;
 pub mod m20260301_000001_add_shielded_pool_tables;
+pub mod m20260302_000001_add_state_tree_history_root_hash;
 pub fn get_standard_migrations() -> Vec<Box<dyn MigrationTrait>> {
     vec![
         Box::new(m20220101_000001_init::Migration),
@@ -40,5 +41,6 @@ pub fn get_standard_migrations() -> Vec<Box<dyn MigrationTrait>> {
         Box::new(m20260210_000002_add_ata_owner_index::Migration),
         Box::new(m20260220_000001_add_discriminator_v2::Migration),
         Box::new(m20260301_000001_add_shielded_pool_tables::Migration),
+        Box::new(m20260302_000001_add_state_tree_history_root_hash::Migration),
     ]
 }

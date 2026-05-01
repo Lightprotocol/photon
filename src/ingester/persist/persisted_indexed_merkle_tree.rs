@@ -11,7 +11,7 @@ use crate::ingester::persist::indexed_merkle_tree::{
 use crate::ingester::persist::leaf_node::{persist_leaf_nodes, LeafNode};
 use crate::{
     common::typedefs::{hash::Hash, serializable_pubkey::SerializablePubkey},
-    dao::generated::{indexed_trees, state_trees},
+    dao::generated::{indexed_trees, state_tree_histories, state_trees},
     ingester::{
         error::IngesterError,
         parser::{indexer_events::RawIndexedElement, state_update::IndexedTreeLeafUpdate},
@@ -255,31 +255,45 @@ pub async fn persist_indexed_tree_updates(
             })?;
         persist_leaf_nodes(txn, state_tree_leaf_nodes, tree_height).await?;
 
+        let mut root_hashes = HashMap::new();
+        for tree in chunk.iter().map(|x| x.tree).unique() {
+            let root_hash = state_trees::Entity::find()
+                .filter(state_trees::Column::Tree.eq(tree.to_bytes().to_vec()))
+                .filter(state_trees::Column::NodeIdx.eq(1))
+                .one(txn)
+                .await
+                .map_err(|e| {
+                    IngesterError::DatabaseError(format!(
+                        "Failed to fetch indexed tree root history hash: {}",
+                        e
+                    ))
+                })?
+                .map(|root| root.hash);
+            root_hashes.insert(tree, root_hash);
+        }
+
         let address_tree_history_models = chunk
             .iter()
-            .map(
-                |x| crate::dao::generated::state_tree_histories::ActiveModel {
-                    tree: Set(x.tree.to_bytes().to_vec()),
-                    seq: Set(x.seq as i64),
-                    leaf_idx: Set(x.leaf.index as i64),
-                    transaction_signature: Set(Into::<[u8; 64]>::into(x.signature).to_vec()),
-                },
-            )
+            .map(|x| state_tree_histories::ActiveModel {
+                tree: Set(x.tree.to_bytes().to_vec()),
+                seq: Set(x.seq as i64),
+                leaf_idx: Set(x.leaf.index as i64),
+                transaction_signature: Set(Into::<[u8; 64]>::into(x.signature).to_vec()),
+                root_hash: Set(root_hashes.get(&x.tree).cloned().flatten()),
+            })
             .collect::<Vec<_>>();
 
         if !address_tree_history_models.is_empty() {
-            let query = crate::dao::generated::state_tree_histories::Entity::insert_many(
-                address_tree_history_models,
-            )
-            .on_conflict(
-                OnConflict::columns([
-                    crate::dao::generated::state_tree_histories::Column::Tree,
-                    crate::dao::generated::state_tree_histories::Column::Seq,
-                ])
-                .do_nothing()
-                .to_owned(),
-            )
-            .build(txn.get_database_backend());
+            let query = state_tree_histories::Entity::insert_many(address_tree_history_models)
+                .on_conflict(
+                    OnConflict::columns([
+                        state_tree_histories::Column::Tree,
+                        state_tree_histories::Column::Seq,
+                    ])
+                    .update_columns([state_tree_histories::Column::RootHash])
+                    .to_owned(),
+                )
+                .build(txn.get_database_backend());
             txn.execute(query).await?;
         }
     }
@@ -429,6 +443,44 @@ pub async fn multi_append(
     }
 
     persist_leaf_nodes(txn, leaf_nodes, tree_height).await?;
+
+    if let Some(seq) = seq {
+        let root_hash = state_trees::Entity::find()
+            .filter(state_trees::Column::Tree.eq(tree.clone()))
+            .filter(state_trees::Column::NodeIdx.eq(1))
+            .one(txn)
+            .await
+            .map_err(|e| {
+                IngesterError::DatabaseError(format!(
+                    "Failed to fetch indexed tree batch-append root history hash: {}",
+                    e
+                ))
+            })?
+            .map(|root| root.hash);
+        let leaf_idx = elements_to_update
+            .values()
+            .map(|element| element.leaf_index as i64)
+            .max()
+            .unwrap_or(0);
+        let history_model = state_tree_histories::ActiveModel {
+            tree: Set(tree),
+            seq: Set(seq as i64),
+            leaf_idx: Set(leaf_idx),
+            transaction_signature: Set(vec![0; 64]),
+            root_hash: Set(root_hash),
+        };
+        let query = state_tree_histories::Entity::insert(history_model)
+            .on_conflict(
+                OnConflict::columns([
+                    state_tree_histories::Column::Tree,
+                    state_tree_histories::Column::Seq,
+                ])
+                .update_columns([state_tree_histories::Column::RootHash])
+                .to_owned(),
+            )
+            .build(txn.get_database_backend());
+        txn.execute(query).await?;
+    }
 
     Ok(())
 }

@@ -8,6 +8,9 @@
 
 pub mod api;
 pub mod jobs;
+pub mod local_masp;
+pub mod local_relayer;
+pub mod local_verifier;
 pub mod plaintext_projection;
 pub mod private_api;
 pub mod private_db;

@@ -291,6 +291,7 @@ async fn persist_state_tree_history(
             seq: Set(leaf_node.seq.unwrap() as i64),
             leaf_idx: Set(leaf_node.leaf_index as i64),
             transaction_signature: Set(Into::<[u8; 64]>::into(signature).to_vec()),
+            root_hash: Set(None),
         })
         .collect_vec();
     // We first build the query and then execute it because SeaORM has a bug where it always throws

@@ -108,6 +108,7 @@ pub enum StateTreeHistories {
     Seq,
     TransactionSignature,
     LeafIdx,
+    RootHash,
 }
 
 #[derive(Copy, Clone, Iden)]

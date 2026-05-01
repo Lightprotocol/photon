@@ -17,11 +17,16 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub const SHIELDED_POOL_TX_EVENT_V1_DISCRIMINATOR: [u8; 8] =
     [b's', b'h', b'l', b'd', b'p', b'l', b'v', b'1'];
 
+/// Distinct discriminator for nullifier/spend events. ASCII "shldnlv1".
+pub const SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR: [u8; 8] =
+    [b's', b'h', b'l', b'd', b'n', b'l', b'v', b'1'];
+
 /// Current event version. Incremented in lockstep with the on-chain program;
 /// the parser refuses to deserialize newer versions until the parser is
 /// updated, but a malformed/unknown-version event must not stop unrelated
 /// indexing.
 pub const SHIELDED_POOL_TX_EVENT_VERSION: u8 = 1;
+pub const SHIELDED_POOL_NULLIFIER_EVENT_VERSION: u8 = 1;
 
 /// What kind of shielded-pool transition this event encodes. The `tx_kind`
 /// drives how the on-chain verifier processes public deltas, fees, and zone
@@ -191,9 +196,10 @@ impl ShieldedPoolTxEvent {
     }
 }
 
-/// On-chain spend event for an existing UTXO. The first milestone does not
-/// emit these but the shape is fixed now so persistence and
-/// API code can reference it.
+/// On-chain spend event for an existing UTXO. The proofless append path does
+/// not emit these for real spends yet, but local/dev fixtures use the same
+/// shape so parser, persistence, and proof-input code exercise the production
+/// wire format.
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ShieldedNullifierEvent {
     pub event_discriminator: [u8; 8],
@@ -203,6 +209,50 @@ pub struct ShieldedNullifierEvent {
     /// `tx_signature_index` lets the persistence layer link a nullifier back
     /// to the transaction event that consumed it.
     pub tx_event_index: u32,
+}
+
+impl ShieldedNullifierEvent {
+    /// True when the prefix matches the v1 nullifier-event discriminator.
+    pub fn matches_discriminator(data: &[u8]) -> bool {
+        data.len() >= SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR.len()
+            && data[..SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR.len()]
+                == SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR
+    }
+
+    /// Build a borsh blob ready for a Noop CPI.
+    pub fn to_event_bytes(&self) -> Result<Vec<u8>, std::io::Error> {
+        if self.event_discriminator != SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "event_discriminator must equal SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR",
+            ));
+        }
+        if self.version != SHIELDED_POOL_NULLIFIER_EVENT_VERSION {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unsupported shielded-pool nullifier event version",
+            ));
+        }
+        borsh::to_vec(self)
+    }
+
+    /// Decode and validate the v1 wire format.
+    pub fn from_event_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let event = ShieldedNullifierEvent::try_from_slice(data)?;
+        if event.event_discriminator != SHIELDED_POOL_NULLIFIER_EVENT_V1_DISCRIMINATOR {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "nullifier event discriminator mismatch",
+            ));
+        }
+        if event.version != SHIELDED_POOL_NULLIFIER_EVENT_VERSION {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unsupported shielded-pool nullifier event version",
+            ));
+        }
+        Ok(event)
+    }
 }
 
 /// **Test-fixture only.** Plaintext payload sidecar that mirrors the

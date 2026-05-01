@@ -11,6 +11,7 @@ pub struct Model {
     pub seq: i64,
     pub leaf_idx: i64,
     pub transaction_signature: Vec<u8>,
+    pub root_hash: Option<Vec<u8>>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

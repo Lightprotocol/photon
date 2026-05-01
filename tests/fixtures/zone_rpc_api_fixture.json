@@ -1,0 +1,163 @@
+{
+  "fixtures": [
+    {
+      "method": "fetch_utxos",
+      "request": {
+        "zoneConfigHash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+        "limit": 10
+      },
+      "response": {
+        "context": {
+          "slot": 100
+        },
+        "items": [
+          {
+            "utxoHash": "0x1f47c5281f9acb0f8fe840d5702d6d6c7cc15cd0a10e25d51022b72f59a4f4e5",
+            "encryptedUtxo": "0x00",
+            "encryptedUtxoHash": "0x6c52b497ac8dff5f4b06f32dd8e82d8e2d469af6f4ff147f3eec593d45d7f3aa",
+            "zoneConfigHash": "0x7777777777777777777777777777777777777777777777777777777777777777"
+          }
+        ]
+      }
+    },
+    {
+      "method": "fetch_decrypted_utxos",
+      "request": {
+        "zoneConfigHash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+        "ownerHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "authorization": {
+          "requester": "local-test",
+          "message": "local-test-query",
+          "signature": "local-test-signature"
+        },
+        "limit": 10
+      },
+      "response": {
+        "items": [
+          {
+            "utxoHash": "0x1f47c5281f9acb0f8fe840d5702d6d6c7cc15cd0a10e25d51022b72f59a4f4e5",
+            "ownerHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "splAmount": "1000000",
+            "solAmount": "42",
+            "spent": false
+          }
+        ]
+      }
+    },
+    {
+      "method": "fetch_proof_inputs",
+      "request": {
+        "zoneConfigHash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+        "inputUtxoHashes": [
+          "0x1f47c5281f9acb0f8fe840d5702d6d6c7cc15cd0a10e25d51022b72f59a4f4e5"
+        ],
+        "spendNullifiers": [
+          "0x18b1a4cdd7abef7d2f7ac0c8e93a795e25104e8388bc7f4eb3e6df346de2f701"
+        ],
+        "nullifierTree": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "shieldedPoolProgramId": "11111111111111111111111111111112",
+        "utxoRootSequence": 1,
+        "nullifierRootSequence": 11,
+        "authorization": {
+          "requester": "local-test",
+          "message": "local-test-query",
+          "signature": "local-test-signature"
+        }
+      },
+      "response": {
+        "rootContextStatus": {
+          "isAvailable": true
+        },
+        "rootContext": {
+          "utxoRootSequence": 1,
+          "nullifierRootSequence": 11
+        }
+      }
+    },
+    {
+      "method": "fetch_proofs",
+      "request": {
+        "intent": {
+          "intentHash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+          "intentPayload": "local-dev-intent-payload",
+          "signer": "local-dev-signer",
+          "signature": "local-dev-signature"
+        },
+        "proofRequests": [
+          {
+            "circuitType": "masp-utxo",
+            "payload": "{\"circuitType\":\"masp-utxo\",\"nInputs\":1,\"nOutputs\":1,\"publicInputsHash\":\"4943912979949338489417158783825493539078525471299482715633804829989690653987\",\"localWitness\":{\"shaTxHash\":\"368117349263227704080282005029041276434067347407471368050506946661059041044\",\"programIdHashchain\":\"16\",\"seedsHashchain\":\"0\",\"txHash\":\"19333450320955828747452136368210966385466111426736339055582248654739795328220\",\"nullifierChain\":\"181017654217451813108531323721893507656536316138432401299064544851990017279\"}}"
+          },
+          {
+            "circuitType": "masp-tree",
+            "payload": "{\"circuitType\":\"masp-tree\",\"nInputs\":1,\"nOutputs\":0,\"publicInputsHash\":\"21697816001627673966445992098739214224505399784786087624048593587667898390844\",\"localWitness\":{\"stateRoots\":[\"7512160851830436092105396208433415757162517233992012243821510870087481004522\"],\"nullifierRoots\":[\"253283340046601621815505857275135328272128915193276070354265006950372528124\"],\"nullifiers\":[\"181017654217451813108531323721893507656536316138432401299064544851990017279\"],\"accountOwnerHash\":[\"354552353484841623159171967393040667416473945166999297896585766077394688323\"],\"accountTreeHash\":[\"389945252665091871473526813061906209008713728085775685358943405534331710331\"],\"accountDiscriminator\":[\"8316015890662717489\"]}}"
+          }
+        ],
+        "proverMode": "sync"
+      },
+      "response": {
+        "proofJobId": "proof-1",
+        "proofJobs": [
+          {
+            "circuitType": "masp-utxo",
+            "publicInputsHash": "4943912979949338489417158783825493539078525471299482715633804829989690653987",
+            "status": "succeeded"
+          },
+          {
+            "circuitType": "masp-tree",
+            "publicInputsHash": "21697816001627673966445992098739214224505399784786087624048593587667898390844",
+            "status": "succeeded"
+          }
+        ]
+      }
+    },
+    {
+      "method": "submit_intent",
+      "request": {
+        "intent": {
+          "intentHash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+          "intentPayload": "{\"proofJobId\":\"proof-1\",\"rootContext\":{\"utxoTreeId\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"utxoRoot\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"utxoRootIndex\":1,\"utxoRootSequence\":1,\"nullifierTreeId\":\"0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"nullifierRoot\":\"0x3333333333333333333333333333333333333333333333333333333333333333\",\"nullifierRootIndex\":11,\"nullifierRootSequence\":11,\"expiresAfterSlot\":null},\"verifierAccounts\":{\"verifierProgramId\":\"AjKZcN4U9wmd6325p1yJu48r9sHyz9s5TkyVPjTGaySo\",\"feePayer\":\"AoErkfXUkF4rE8GbFKJEBvucQ2WBfDYu2Ae9T7VsLJmW\",\"utxoTree\":\"29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2\",\"nullifierTree\":\"ErNbLjU6E8tSbZH3REsMeTDP3Z8G52k6YedWwvBpAJ7v\"},\"recentBlockhash\":\"local-dev-blockhash\"}",
+          "signer": "local-dev-signer",
+          "signature": "local-dev-signature"
+        }
+      },
+      "response": {
+        "relayerJobId": "relayer-2"
+      }
+    },
+    {
+      "method": "get_proof_job",
+      "request": {
+        "proofJobId": "proof-1"
+      },
+      "response": {
+        "jobId": "proof-1",
+        "status": "succeeded"
+      }
+    },
+    {
+      "method": "get_relayer_job",
+      "request": {
+        "relayerJobId": "relayer-2"
+      },
+      "response": {
+        "jobId": "relayer-2",
+        "status": "succeeded",
+        "result": "{\"status\":\"localTransactionCandidateBuilt\",\"rootStatus\":\"providedAndBoundToProofs\",\"localVerifier\":{\"status\":\"verified\"},\"transactionCandidate\":{\"kind\":\"local-dev-verifier-instruction\"}}"
+      }
+    },
+    {
+      "method": "get_zone_info",
+      "request": {
+        "zoneConfigHash": "0x7777777777777777777777777777777777777777777777777777777777777777"
+      },
+      "response": {
+        "value": {
+          "zoneConfigHash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+          "firstSeenSlot": 100,
+          "lastSeenSlot": 100
+        }
+      }
+    }
+  ]
+}

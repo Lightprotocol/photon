@@ -201,7 +201,7 @@ fn continously_index_new_blocks(
     rpc_client: Arc<RpcClient>,
     last_indexed_slot: u64,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+    tokio::task::spawn_local(async move {
         let block_stream = block_stream_config.load_block_stream();
         index_block_stream(
             block_stream,
@@ -214,8 +214,7 @@ fn continously_index_new_blocks(
     })
 }
 
-#[tokio::main]
-async fn main() {
+async fn run() {
     let args = Args::parse();
     setup_logging(args.logging_format);
     setup_metrics(args.metrics_endpoint);
@@ -442,4 +441,9 @@ async fn main() {
     if let Some(api_handler) = api_handler {
         tokio::spawn(api_handler.stopped());
     }
+}
+
+#[tokio::main]
+async fn main() {
+    tokio::task::LocalSet::new().run_until(run()).await;
 }

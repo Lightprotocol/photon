@@ -7,7 +7,7 @@ use crate::ingester::parser::state_update::{
 use crate::ingester::parser::tree_info::{TreeInfo, TreeResolver};
 use crate::ingester::parser::{get_compression_program_id, NOOP_PROGRAM_ID};
 use crate::ingester::typedefs::block_info::{Instruction, TransactionInfo};
-use light_compressed_account::TreeType;
+use light_compressed_account::{Pubkey as LightPubkey, TreeType};
 use log::info;
 use solana_signature::Signature;
 use std::collections::HashMap;
@@ -88,17 +88,30 @@ where
         .zip(transaction_event.output_leaf_indices.iter())
         .enumerate()
     {
-        let tree = transaction_event.pubkey_array[out_account.merkle_tree_index as usize];
+        let packed_tree_or_queue =
+            transaction_event.pubkey_array[out_account.merkle_tree_index as usize];
+        let packed_tree_or_queue_solana =
+            solana_pubkey::Pubkey::new_from_array(packed_tree_or_queue.to_bytes());
+        let preloaded_tree_info = TreeInfo::get_by_pubkey(conn, &packed_tree_or_queue_solana)
+            .await
+            .map_err(|e| IngesterError::ParserError(format!("Failed to get tree info: {}", e)))?;
+        let sequence_tree = preloaded_tree_info
+            .as_ref()
+            .map(|info| LightPubkey::from(info.tree.to_bytes()))
+            .unwrap_or(packed_tree_or_queue);
         let tree_sequence = *tree_to_seq_number
-            .get(&tree)
+            .get(&sequence_tree)
             .ok_or_else(|| IngesterError::ParserError("Missing sequence number".to_string()))?;
-        let tree_solana = solana_pubkey::Pubkey::new_from_array(tree.to_bytes());
+        let context_tree = preloaded_tree_info
+            .as_ref()
+            .map(|info| info.tree)
+            .unwrap_or(packed_tree_or_queue_solana);
         state_update
             .compressed_output_contexts
             .push(CompressedOutputContextRecord {
                 compressed_output_index: output_index as u32,
                 compressed_account_hash: *hash,
-                tree: tree_solana,
+                tree: context_tree,
                 leaf_index: *leaf_index as u64,
                 tree_sequence,
                 data_hash: out_account
@@ -107,27 +120,34 @@ where
                     .as_ref()
                     .map(|data| data.data_hash),
             });
-        let tree_and_queue = match TreeInfo::get_by_pubkey(conn, &tree_solana)
-            .await
-            .map_err(|e| IngesterError::ParserError(format!("Failed to get tree info: {}", e)))?
-        {
+        let tree_and_queue = match preloaded_tree_info {
             Some(info) => {
                 log::debug!(
                     "tx_event_parser tree={}, tree_type={:?}, queue={}",
-                    tree_solana,
+                    context_tree,
                     info.tree_type,
                     info.queue
                 );
                 info
             }
-            None => match resolver.discover_tree(conn, &tree_solana, slot).await {
+            None => match resolver
+                .discover_tree(conn, &packed_tree_or_queue_solana, slot)
+                .await
+            {
                 Ok(Some(info)) => info,
                 Ok(None) => {
-                    log::debug!("Tree {} not discoverable, skipping", tree_solana);
+                    log::debug!(
+                        "Tree {} not discoverable, skipping",
+                        packed_tree_or_queue_solana
+                    );
                     continue;
                 }
                 Err(e) => {
-                    log::warn!("Failed to discover tree {}: {}", tree_solana, e);
+                    log::warn!(
+                        "Failed to discover tree {}: {}",
+                        packed_tree_or_queue_solana,
+                        e
+                    );
                     continue;
                 }
             },
@@ -135,12 +155,12 @@ where
 
         let mut seq = None;
         if tree_and_queue.tree_type == TreeType::StateV1 {
-            seq = Some(*tree_to_seq_number.get(&tree).ok_or_else(|| {
+            seq = Some(*tree_to_seq_number.get(&sequence_tree).ok_or_else(|| {
                 IngesterError::ParserError("Missing sequence number".to_string())
             })?);
 
             let seq = tree_to_seq_number
-                .get_mut(&tree)
+                .get_mut(&sequence_tree)
                 .ok_or_else(|| IngesterError::ParserError("Missing sequence number".to_string()))?;
             *seq += 1;
         }
